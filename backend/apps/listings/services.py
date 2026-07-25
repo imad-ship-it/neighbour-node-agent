@@ -42,7 +42,7 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-def _build_prompt(error_context: str | None = None) -> str:
+def _build_prompt(error_context: str | None = None, description: str = "") -> str:
     categories = ", ".join(Listing.Category.values)
     conditions = ", ".join(Listing.Condition.values)
     prompt = (
@@ -56,6 +56,12 @@ def _build_prompt(error_context: str | None = None) -> str:
         "Do not wrap the JSON in markdown code fences. "
         "Do not write any text before or after the JSON."
     )
+    if description:
+        prompt += (
+            f"\n\nThe lender describes the item as: {description!r}\n"
+            "Use this to inform the fields where the photo alone is ambiguous."
+        )
+
     if error_context:
         prompt += (
             "\n\nYour previous response was rejected with this error:\n"
@@ -65,9 +71,15 @@ def _build_prompt(error_context: str | None = None) -> str:
     return prompt
 
 
-def extract_listing_from_image(image_bytes: bytes) -> ListingExtraction:
+def extract_listing_from_image(
+    image_bytes: bytes, description: str = ""
+) -> ListingExtraction:
     image_hash = hashlib.sha256(image_bytes).hexdigest()
-    key = "listing_extraction:" + image_hash
+    key = (
+        "listing_extraction:"
+        + hashlib.sha256(image_bytes + description.encode()).hexdigest()
+    )
+
     cached = cache.get(key)
     if cached is not None:
         return ListingExtraction(**cached)
@@ -78,7 +90,7 @@ def extract_listing_from_image(image_bytes: bytes) -> ListingExtraction:
     error_context = None
     last_error: Exception | None = None
     for _attempt in range(2):  # initial call + exactly one retry
-        prompt = _build_prompt(error_context)
+        prompt = _build_prompt(error_context, description)
         raw = provider.generate(prompt, image_base64=image_b64, media_type=media_type)
         trace_call(
             "listing_extraction",

@@ -4,6 +4,7 @@ import io
 import json
 
 from apps.core.services.llm import get_llm_provider
+from apps.core.services.tracing import trace_call
 from django.core.cache import cache
 from pydantic import ValidationError
 
@@ -65,7 +66,8 @@ def _build_prompt(error_context: str | None = None) -> str:
 
 
 def extract_listing_from_image(image_bytes: bytes) -> ListingExtraction:
-    key = "listing_extraction:" + hashlib.sha256(image_bytes).hexdigest()
+    image_hash = hashlib.sha256(image_bytes).hexdigest()
+    key = "listing_extraction:" + image_hash
     cached = cache.get(key)
     if cached is not None:
         return ListingExtraction(**cached)
@@ -76,8 +78,16 @@ def extract_listing_from_image(image_bytes: bytes) -> ListingExtraction:
     error_context = None
     last_error: Exception | None = None
     for _attempt in range(2):  # initial call + exactly one retry
-        raw = provider.generate(
-            _build_prompt(error_context), image_base64=image_b64, media_type=media_type
+        prompt = _build_prompt(error_context)
+        raw = provider.generate(prompt, image_base64=image_b64, media_type=media_type)
+        trace_call(
+            "listing_extraction",
+            {
+                "prompt": prompt,
+                "image_sha256": image_hash,
+                "image_media_type": media_type,
+            },
+            raw,
         )
         try:
             data = json.loads(_strip_fences(raw))

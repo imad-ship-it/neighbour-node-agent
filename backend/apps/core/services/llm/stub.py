@@ -1,19 +1,19 @@
-from decimal import Decimal
-
-from apps.listings.models import Listing
-from apps.listings.schemas import ListingExtraction
-
 from .base import LLMProvider
 
 
 class StubLLMProvider(LLMProvider):
-    def extract_listing(
-        self, image_bytes: bytes, media_type: str = "image/jpeg"
-    ) -> ListingExtraction:
-        return ListingExtraction(
-            title="Cordless Drill",
-            description="A gently used cordless power drill, great for small home projects.",
-            category=Listing.Category.TOOLS,
-            condition=Listing.Condition.GOOD,
-            suggested_price=Decimal("35.00"),
-        )
+    def generate(
+        self,
+        prompt: str,
+        image_base64: str | None = None,
+        media_type: str = "image/jpeg",
+    ) -> str:
+        return """```json
+{
+  "title": "Cordless Drill",
+  "description": "A gently used cordless power drill, great for small home projects.",
+  "category": "tools",
+  "condition": "good",
+  "suggested_price": "35.00"
+}
+```"""

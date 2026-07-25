@@ -1,4 +1,3 @@
-from apps.listings.schemas import ListingExtraction
 from django.conf import settings
 
 from .base import LLMProvider
@@ -9,8 +8,6 @@ class AnthropicLLMProvider(LLMProvider):
     TIMEOUT_SECONDS = 30.0
 
     def __init__(self) -> None:
-        # Lazy import: the `anthropic` package is only needed on the real path,
-        # so the stub path never requires it to be installed.
         import anthropic
 
         self._client = anthropic.Anthropic(
@@ -18,35 +15,30 @@ class AnthropicLLMProvider(LLMProvider):
             timeout=self.TIMEOUT_SECONDS,
         )
 
-    def extract_listing(
-        self, image_bytes: bytes, media_type: str = "image/jpeg"
-    ) -> ListingExtraction:
-        # SKELETON — real vision-extraction call goes here in a later task.
-        # Intended shape (per the Anthropic API reference):
+    def generate(
+        self,
+        prompt: str,
+        image_base64: str | None = None,
+        media_type: str = "image/jpeg",
+    ) -> str:
+        # SKELETON — real call goes here in a later task. Intended shape:
         #
-        #   import base64
+        #   import anthropic
+        #   content = []
+        #   if image_base64:
+        #       content.append({"type": "image", "source": {
+        #           "type": "base64", "media_type": media_type, "data": image_base64}})
+        #   content.append({"type": "text", "text": prompt})
         #   try:
-        #       response = self._client.messages.parse(
+        #       response = self._client.messages.create(
         #           model=self.MODEL,
         #           max_tokens=1024,
         #           thinking={"type": "adaptive"},
-        #           output_format=ListingExtraction,   # validates to the schema
-        #           messages=[{
-        #               "role": "user",
-        #               "content": [
-        #                   {"type": "image", "source": {
-        #                       "type": "base64",
-        #                       "media_type": media_type,
-        #                       "data": base64.standard_b64encode(image_bytes).decode(),
-        #                   }},
-        #                   {"type": "text", "text": "Extract the listing details from this image."},
-        #               ],
-        #           }],
+        #           messages=[{"role": "user", "content": content}],
         #       )
-        #       return response.parsed_output
-        #   except anthropic.APIError as exc:
-        #       # timeout / rate limit / server error handling lives HERE, once,
-        #       # so no caller ever has to wrap extract_listing() themselves.
+        #       return "".join(b.text for b in response.content if b.type == "text")
+        #   except anthropic.APIError:
+        #       # timeout / rate-limit / server errors handled HERE, once
         #       raise
         raise NotImplementedError(
             "AnthropicLLMProvider is not implemented yet. Set LLM_PROVIDER=stub."

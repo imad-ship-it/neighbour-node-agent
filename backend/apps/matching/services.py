@@ -14,6 +14,8 @@ class MatchError(Exception):
 
 
 EARTH_RADIUS_KM = 6371
+DEFAULT_RADIUS_KM = 25  # used when the user didn't state a distance
+CANDIDATE_LIMIT = 25  # cap: past this you pay tokens for listings that will never rank
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -120,3 +122,42 @@ def understand_query(text, prior_query=None, *, run_id="", step_index=0, overrid
         return generate_and_validate(_call, MatchQuery, max_retries=1)
     except LLMValidationError as exc:
         raise MatchError(f"Query understanding failed: {exc}") from exc
+
+
+def retrieve_candidates(
+    query, lat, lng, *, run_id="", step_index=1, limit=CANDIDATE_LIMIT
+):
+    """Step 2 (no LLM): turn a MatchQuery's HARD constraints into a DB query.
+
+    Hard filters only — availability, price ceiling, radius. Category and condition are
+    deliberately NOT filtered here: they're soft signals the ranker weighs, so a
+    wrong-category-but-nearby listing still surfaces as a candidate to be ranked down.
+    The model never does arithmetic filtering.
+    """
+    filters = {"is_available": True}
+    if query.max_price is not None:
+        filters["price__lte"] = query.max_price
+    radius = query.max_distance_km or DEFAULT_RADIUS_KM
+
+    started = time.perf_counter()
+    results = search_listings_by_distance(
+        lat, lng, radius, filters
+    )  # already nearest-first
+    capped = results[:limit]
+
+    trace_call(
+        agent_name="match_retrieve",
+        arguments={
+            "max_price": str(query.max_price) if query.max_price is not None else None,
+            "radius_km": radius,
+            "availability": True,
+            "limit": limit,
+        },
+        raw_response=f"{len(results)} within radius, capped to {len(capped)}",
+        run_id=run_id,
+        step_index=step_index,
+        tool_name="geo_search",
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        status="ok",
+    )
+    return capped

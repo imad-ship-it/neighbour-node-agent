@@ -1,12 +1,13 @@
 import base64
 import hashlib
 import io
-import json
+import time
+from uuid import uuid4
 
-from apps.core.services.llm import get_llm_provider
+from apps.core.services.llm import get_provider
 from apps.core.services.tracing import trace_call
+from apps.core.services.validation import LLMValidationError, generate_and_validate
 from django.core.cache import cache
-from pydantic import ValidationError
 
 from .models import Listing
 from .schemas import ListingExtraction
@@ -24,22 +25,10 @@ def _prepare_image(image_bytes: bytes) -> tuple[str, str]:
     from PIL import Image
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img.thumbnail(
-        (MAX_IMAGE_DIM, MAX_IMAGE_DIM)
-    )  # shrinks only; preserves aspect ratio
+    img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM))  # shrinks only; preserves aspect
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return base64.standard_b64encode(buf.getvalue()).decode(), "image/jpeg"
-
-
-def _strip_fences(text: str) -> str:
-    """Remove a leading ```json / ``` line and a trailing ``` if present."""
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else ""
-        if t.rstrip().endswith("```"):
-            t = t.rstrip()[:-3]
-    return t.strip()
 
 
 def _build_prompt(error_context: str | None = None, description: str = "") -> str:
@@ -61,7 +50,6 @@ def _build_prompt(error_context: str | None = None, description: str = "") -> st
             f"\n\nThe lender describes the item as: {description!r}\n"
             "Use this to inform the fields where the photo alone is ambiguous."
         )
-
     if error_context:
         prompt += (
             "\n\nYour previous response was rejected with this error:\n"
@@ -75,39 +63,53 @@ def extract_listing_from_image(
     image_bytes: bytes, description: str = ""
 ) -> ListingExtraction:
     image_hash = hashlib.sha256(image_bytes).hexdigest()
-    key = (
+    cache_key = (
         "listing_extraction:"
         + hashlib.sha256(image_bytes + description.encode()).hexdigest()
     )
-
-    cached = cache.get(key)
+    cached = cache.get(cache_key)
     if cached is not None:
         return ListingExtraction(**cached)
 
     image_b64, media_type = _prepare_image(image_bytes)
-    provider = get_llm_provider()
+    provider = get_provider("extraction")
+    run_id = uuid4().hex
 
-    error_context = None
-    last_error: Exception | None = None
-    for _attempt in range(2):  # initial call + exactly one retry
+    def _call(step_index: int, error_context: str | None) -> str:
         prompt = _build_prompt(error_context, description)
-        raw = provider.generate(prompt, image_base64=image_b64, media_type=media_type)
-        trace_call(
-            "listing_extraction",
-            {
-                "prompt": prompt,
-                "image_sha256": image_hash,
-                "image_media_type": media_type,
-            },
-            raw,
-        )
+        started = time.perf_counter()
+        status = "ok"
+        raw = ""
         try:
-            data = json.loads(_strip_fences(raw))
-            result = ListingExtraction(**data)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            last_error, error_context = exc, str(exc)
-            continue
-        cache.set(key, result.model_dump(mode="json"), CACHE_TTL)
-        return result
+            raw = provider.generate(
+                prompt, image_base64=image_b64, media_type=media_type
+            )
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            trace_call(
+                agent_name="listing_extraction",
+                arguments={
+                    "prompt": prompt,
+                    "image_sha256": image_hash,
+                    "image_media_type": media_type,
+                },
+                raw_response=raw,
+                run_id=run_id,
+                step_index=step_index,
+                tool_name="llm.generate",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status=status,
+            )
+        return raw
 
-    raise ExtractionError(f"Extraction failed after one retry: {last_error}")
+    # Fence-stripping, JSON parsing, validation, and the capped retry now live in
+    # the shared core helper — this service only supplies the per-attempt closure.
+    try:
+        result = generate_and_validate(_call, ListingExtraction, max_retries=1)
+    except LLMValidationError as exc:
+        raise ExtractionError(f"Extraction failed after one retry: {exc}") from exc
+
+    cache.set(cache_key, result.model_dump(mode="json"), CACHE_TTL)
+    return result

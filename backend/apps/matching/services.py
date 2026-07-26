@@ -21,12 +21,25 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return EARTH_RADIUS_KM * c
 
 
-def listings_within_radius(latitude, longitude, radius_km, queryset):
+def search_listings_by_distance(lat, lng, radius_km, filters=None):
+    """Return [(listing, distance_km), ...] within radius_km of (lat, lng),
+    nearest-first.
+
+    `filters` is an optional dict of ORM lookups, e.g.
+    {"is_available": True, "category": "tools"}.
+
+    A plain callable with no view/request dependency — the DRF geo-search view
+    and the Day-5 MCP server both call this; neither reimplements it.
+    """
+    from apps.listings.models import Listing
+
+    queryset = Listing.objects.all()
+    if filters:
+        queryset = queryset.filter(**filters)
+
     results = []
     for listing in queryset:
-        distance = haversine_distance(
-            latitude, longitude, listing.latitude, listing.longitude
-        )
+        distance = haversine_distance(lat, lng, listing.latitude, listing.longitude)
         if distance <= radius_km:
             results.append((listing, distance))
 

@@ -57,7 +57,13 @@ REST_FRAMEWORK = {
     ),
 }
 
-LLM_PROVIDER = config("LLM_PROVIDER", default="stub")
+# Per-role LLM provider selection. Each role resolves independently, so Claude
+# and DeepSeek can be live at once for different jobs. Values: stub | anthropic | deepseek.
+EXTRACTION_PROVIDER = config("EXTRACTION_PROVIDER", default="stub")
+MATCHING_PROVIDER = config("MATCHING_PROVIDER", default="stub")
+
+ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
+DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", default="")
 
 
 CORS_ALLOWED_ORIGINS = [

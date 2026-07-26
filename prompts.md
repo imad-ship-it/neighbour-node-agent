@@ -308,6 +308,94 @@ pre-fills an editable form from the extraction and posts JSON to `/listings/`. S
 
 ---
 
+## Phase 3 — Match & Ranking agent (Day 4)
+
+Contracts-first, then the agent one step at a time, all runnable against the stub. Reuses
+the multi-agent refactor infra (role-based `get_provider`, shared `generate_and_validate`,
+run-scoped `TraceLog`, geo-search as a plain callable).
+
+### 20. Define the match-agent contracts first
+**Prompt:** Before any logic, three Pydantic models: `MatchQuery` (structured intent —
+keywords, category guess, max price, max distance, condition floor, notes), `RankedMatch`
+(listing id, score, rank, Markdown explanation, matched factors, concerns), and
+`MatchResponse` (the list + candidate count + run id + a `degraded` flag). Everything else
+today is written against these, and they're what the retry loop repairs toward.
+
+**Result:** `apps/matching/schemas.py` with the three models, mirroring `ListingExtraction`.
+`MatchQuery.category_guess`/`condition_floor` reuse `Listing.Category`/`Listing.Condition`
+(same single-source-of-truth trick), everything except `keywords` optional/nullable.
+`RankedMatch.score` bounded `ge=0, le=1`, `rank` `ge=1`; `MatchResponse.degraded` defaults
+`False`. Verified in the shell: a valid `MatchQuery` parses and coerces (`max_price="45"` →
+`Decimal('45')`), and `RankedMatch(score=1.5)` raises `ValidationError` on the bound — proof
+the contract actually constrains, which is the point, since the retry loop repairs LLM
+output *toward* it.
+
+**Decisions I made (flagged, not assumed):**
+- **`category_guess`, not `category`** — it's the LLM's guess, a soft signal ranking can
+  override, so it's nullable. Same for `condition_floor`. This deliberately keeps them
+  *out* of the hard-filter path (pays off in task 22).
+- **`score` (0–1) and `rank` both stored** — score is raw strength, rank is position after
+  sorting; keeping both means the frontend never recomputes.
+- **`matched_factors`/`concerns` as lists, `explanation` as Markdown** — machine-readable
+  factors for badges/filters, prose for the human.
+
+### 21. Match agent step 1 — query understanding (LLM call #1)
+**Prompt:** Free text in, `MatchQuery` out. Keep the token budget tiny — it's a parsing
+job. Design the prompt to accept an optional *prior query* as context now, even though
+session memory doesn't ship until Day 5, so "actually, something cheaper" becomes a
+refinement instead of a fresh search. Building the parameter today makes Day 5 plumbing
+rather than a redesign.
+
+**Result:** `understand_query(text, prior_query=None, *, run_id, step_index, override)` in
+`matching/services.py`, reusing `get_provider("matching")`, a traced per-attempt closure,
+and `generate_and_validate(..., MatchQuery, max_retries=1)`. `_build_query_prompt` injects
+the allowed category/condition values and, when `prior_query` is present, tells the model
+to *carry over unchanged fields and only override what the new message implies*. Verified
+against the stub: returns a valid `MatchQuery`, writes one trace row at step 0, and the
+refinement path threads the prior query into the prompt without error.
+
+**Corrections applied:**
+- **The stub only knew the extraction call.** `StubLLMProvider.generate` returned the drill
+  JSON regardless, so validating against `MatchQuery` would fail every time. Taught the stub
+  to be prompt-aware — a branch on `"keywords" in prompt` returns MatchQuery-shaped JSON,
+  else the extraction default. Keyed on a field name that's always in the prompt, so it's a
+  stable marker, not a fragile phrase match. Keeps the "runs with no keys" promise true for
+  the match agent too.
+- **`run_id`/`step_index` are parameters, not generated inside.** Extraction generated its
+  own `run_id` (single call); the match agent is a graph, so the orchestrator owns one
+  `run_id` and passes it down (query=0, retrieve=1, rank=2) — otherwise the steps wouldn't
+  group together in the trace.
+- **Enum serialization note:** `model_dump()` shows `Listing.Category.TOOLS` (the enum
+  member); `model_dump(mode="json")` gives the plain string for the API — same trick the
+  extraction service already uses.
+
+### 22. Match agent step 2 — candidate retrieval (no LLM)
+**Prompt:** Turn the `MatchQuery`'s hard filters into a DB query via the geo-search
+callable. Rule: the model never does arithmetic filtering — price ceilings, radius, and
+availability are SQL/Python. Cap the candidate set at ~20–25 sorted by distance; beyond
+that you pay tokens for listings that will never rank.
+
+**Result:** `retrieve_candidates(query, lat, lng, *, run_id, step_index, limit=25)` — builds
+`is_available=True` + `price__lte` filters, radius from `max_distance_km` (default 25),
+calls `search_listings_by_distance` (already nearest-first), caps to `limit`, and traces the
+step as a `geo_search` tool call (this is why `TraceLog` grew a `tool_name`). Verified from
+~Philadelphia against the 43-row seed: 43 pruned to **2** candidates.
+
+**The key design decision (flagged, not assumed):** the task names exactly three hard
+filters — price, radius, availability — and stops there. `category_guess` and
+`condition_floor` are **not** filtered; they're soft signals the ranker weighs next. The
+verification proved this pays off: the two survivors were the "Beat-up Nearby Drill" (poor
+condition) and "Cheap Local Camera" (wrong category) — near, cheap, and *deliberately not
+dropped*, so the ranker has a real trade-off to reason about. The far-away "Pristine
+Cordless Drill" was correctly killed by the radius (a hard filter working). If retrieval had
+over-filtered, there'd be nothing interesting to rank.
+
+**Correction:** with `Listing` now imported at module top, the old lazy
+`from apps.listings.models import Listing` inside `search_listings_by_distance` was
+redundant — removed the dead re-import.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -322,3 +410,7 @@ pre-fills an editable form from the extraction and posts JSON to `/listings/`. S
 - **Flag drift instead of silently reconciling it.** Several times the AI caught a task
   assuming a different architecture than what was already built (Location model,
   structured-outputs vs raw-text) and surfaced the decision rather than guessing.
+- **Stub-first means the stub has to answer every call type.** When the match agent added a
+  second kind of LLM call, the extraction-only stub silently failed validation. The fix is a
+  prompt-aware stub that returns the right shape per call — otherwise "runs with no keys"
+  quietly stops being true for the new feature.

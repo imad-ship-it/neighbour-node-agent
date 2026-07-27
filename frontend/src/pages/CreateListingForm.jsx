@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import client from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import Button from '../components/Button'
 
 // Must match the backend Listing.Category / Listing.Condition TextChoices.
@@ -16,6 +17,7 @@ const CONDITIONS = ['new', 'like_new', 'good', 'fair', 'poor']
 
 function CreateListingForm() {
   const navigate = useNavigate()
+  const { user } = useAuth()
 
   // Phase 1 — input
   const [image, setImage] = useState(null)
@@ -90,26 +92,46 @@ function CreateListingForm() {
     }
   }
 
+  // Extraction and create both need a bearer token — say so instead of 401ing.
+  if (!user) {
+    return (
+      <div className="form">
+        <h2>New Listing</h2>
+        <p className="hint">
+          You need to be logged in to post a listing.
+        </p>
+        <p className="form-alt">
+          <Link to="/login">Log in</Link> or <Link to="/signup">create an account</Link>.
+        </p>
+      </div>
+    )
+  }
+
   // Phase 1: pick a photo + describe, then extract.
   if (!draft) {
     return (
-      <form onSubmit={handleExtract}>
+      <form className="form" onSubmit={handleExtract}>
         <h2>New Listing</h2>
-        <div>
+        <p className="hint">
+          Add a photo and we'll draft the listing for you to review.
+        </p>
+        <label>
+          Photo
           <input
             type="file"
             accept="image/*"
             onChange={(event) => setImage(event.target.files[0])}
           />
-        </div>
-        <div>
+        </label>
+        <label>
+          Description
           <textarea
             placeholder="Describe the item (optional — helps the extraction)"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
           />
-        </div>
-        {extractError && <p style={{ color: 'crimson' }}>{extractError}</p>}
+        </label>
+        {extractError && <p className="form-error">{extractError}</p>}
         <Button type="submit" disabled={extracting}>
           {extracting
             ? 'Reading the photo… this can take a few seconds'
@@ -121,8 +143,11 @@ function CreateListingForm() {
 
   // Phase 2: review + edit the extracted fields, then create for real.
   return (
-    <form onSubmit={handleCreate}>
+    <form className="form" onSubmit={handleCreate}>
       <h2>Review &amp; edit</h2>
+      <p className="hint">
+        The AI drafted this — check it over before posting.
+      </p>
       <label>
         Title
         <input
@@ -170,21 +195,28 @@ function CreateListingForm() {
           onChange={(event) => updateField('price', event.target.value)}
         />
       </label>
-      <label>
-        Latitude
-        <input
-          value={draft.latitude}
-          onChange={(event) => updateField('latitude', event.target.value)}
-        />
-      </label>
-      <label>
-        Longitude
-        <input
-          value={draft.longitude}
-          onChange={(event) => updateField('longitude', event.target.value)}
-        />
-      </label>
-      {createError && <p style={{ color: 'crimson' }}>{createError}</p>}
+      {/* Not extracted — the lender supplies these, and create fails if blank. */}
+      <div className="form-row">
+        <label>
+          Latitude
+          <input
+            required
+            placeholder="40.0"
+            value={draft.latitude}
+            onChange={(event) => updateField('latitude', event.target.value)}
+          />
+        </label>
+        <label>
+          Longitude
+          <input
+            required
+            placeholder="-75.0"
+            value={draft.longitude}
+            onChange={(event) => updateField('longitude', event.target.value)}
+          />
+        </label>
+      </div>
+      {createError && <p className="form-error">{createError}</p>}
       <Button type="submit" disabled={creating}>
         {creating ? 'Creating…' : 'Confirm & create listing'}
       </Button>

@@ -38,5 +38,6 @@ class DeepSeekLLMProvider(LLMProvider):
         #
         # Note: deepseek-chat is text-only; image_base64 would need a vision model.
         raise NotImplementedError(
-            "DeepSeekLLMProvider is not implemented yet. Use a stub provider for now."
+            "DeepSeekLLMProvider is not implemented yet. Set MATCHING_PROVIDER=stub "
+            "(or EXTRACTION_PROVIDER=stub, whichever role selected it) in backend/.env."
         )

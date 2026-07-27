@@ -41,5 +41,6 @@ class AnthropicLLMProvider(LLMProvider):
         #       # timeout / rate-limit / server errors handled HERE, once
         #       raise
         raise NotImplementedError(
-            "AnthropicLLMProvider is not implemented yet. Set LLM_PROVIDER=stub."
+            "AnthropicLLMProvider is not implemented yet. Set EXTRACTION_PROVIDER=stub "
+            "(or MATCHING_PROVIDER=stub, whichever role selected it) in backend/.env."
         )

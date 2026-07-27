@@ -1,5 +1,4 @@
 from apps.bookmarks.models import Bookmark
-from asgiref.sync import sync_to_async
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -31,9 +30,18 @@ class ListingViewSet(viewsets.ModelViewSet):
 
 
 class ListingExtractView(APIView):
+    """Draft a listing from a photo.
+
+    Deliberately sync: DRF's APIView.dispatch is synchronous, so an `async def`
+    handler makes Django run the whole view on the event loop while DRF's
+    authentication still runs sync ORM queries inside it — SynchronousOnlyOperation
+    before the handler is ever reached. Under ASGI, Django already runs sync views
+    in a threadpool, so the seconds-long vision call still doesn't block the loop.
+    """
+
     permission_classes = [permissions.IsAuthenticated]
 
-    async def post(self, request):
+    def post(self, request):
         image = request.FILES.get("image")
         if image is None:
             return Response(
@@ -41,19 +49,10 @@ class ListingExtractView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         description = request.data.get("description", "")
+        image_bytes = image.read()
 
-        # Reading the upload can touch disk (large files spill to a temp file),
-        # so it is I/O — wrap it.
-        image_bytes = await sync_to_async(image.read)()
-
-        # extract_listing_from_image writes a TraceLog and hits the cache — both
-        # are sync ORM work an async view can't call directly. sync_to_async runs
-        # it in a thread, which also frees the event loop during the seconds-long
-        # vision wait — the whole reason this endpoint is async.
         try:
-            extraction = await sync_to_async(extract_listing_from_image)(
-                image_bytes, description
-            )
+            extraction = extract_listing_from_image(image_bytes, description)
         except ExtractionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 

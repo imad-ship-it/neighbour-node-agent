@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { apiError } from '../api/client'
 import Button from '../components/Button'
 
 function Signup() {
@@ -18,17 +19,30 @@ function Signup() {
       await register(username, email, password)
       navigate('/')
     } catch (err) {
-      setError('Could not sign up — try a different username.')
+      setError(apiError(err, 'Could not sign up. Please try again.'))
     }
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" />
-      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Password" />
-      {error && <p>{error}</p>}
-      <Button type="submit">Sign Up</Button>
+    <form className="form" onSubmit={handleSubmit}>
+      <h2>Create an account</h2>
+      <label>
+        Username
+        <input value={username} onChange={(e) => setUsername(e.target.value)} />
+      </label>
+      <label>
+        Email
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" />
+      </label>
+      <label>
+        Password
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <Button type="submit">Sign up</Button>
+      <p className="form-alt">
+        Already have an account? <Link to="/login">Log in</Link>
+      </p>
     </form>
   )
 }

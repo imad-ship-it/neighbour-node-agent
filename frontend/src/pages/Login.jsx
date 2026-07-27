@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { apiError } from '../api/client'
 import Button from '../components/Button'
 
 function Login() {
@@ -17,16 +18,26 @@ function Login() {
       await login(username, password)
       navigate('/')
     } catch (err) {
-      setError('Invalid username or password.')
+      setError(apiError(err, 'Invalid username or password.'))
     }
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" />
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Password" />
-      {error && <p>{error}</p>}
-      <Button type="submit">Log In</Button>
+    <form className="form" onSubmit={handleSubmit}>
+      <h2>Welcome back</h2>
+      <label>
+        Username
+        <input value={username} onChange={(e) => setUsername(e.target.value)} />
+      </label>
+      <label>
+        Password
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <Button type="submit">Log in</Button>
+      <p className="form-alt">
+        No account? <Link to="/signup">Sign up</Link>
+      </p>
     </form>
   )
 }

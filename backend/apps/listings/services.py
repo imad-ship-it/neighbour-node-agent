@@ -20,14 +20,35 @@ class ExtractionError(Exception):
     """Raised when extraction fails even after the single retry."""
 
 
+class InvalidImageError(Exception):
+    """Raised when the upload isn't a decodable image.
+
+    Kept separate from ExtractionError: this is bad client input (-> 400), not a
+    failure of the extraction pipeline (-> 502).
+    """
+
+
 def _prepare_image(image_bytes: bytes) -> tuple[str, str]:
     """Resize/cap, re-encode as JPEG, base64. Returns (base64_str, media_type)."""
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM))  # shrinks only; preserves aspect
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    # Every step here can reject the upload: open() on a non-image, convert() and
+    # thumbnail() on a truncated one, and DecompressionBombError on a huge one.
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img.thumbnail((MAX_IMAGE_DIM, MAX_IMAGE_DIM))  # shrinks only; preserves aspect
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise InvalidImageError(
+            "That file isn't a readable image. Upload a JPEG or PNG photo."
+        ) from exc
+
     return base64.standard_b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 

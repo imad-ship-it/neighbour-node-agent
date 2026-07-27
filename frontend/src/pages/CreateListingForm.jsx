@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import client from '../api/client'
+import client, { apiError } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import Button from '../components/Button'
 
@@ -55,9 +55,12 @@ function CreateListingForm() {
         latitude: '',
         longitude: '',
       })
-    } catch {
+    } catch (err) {
       setExtractError(
-        'Could not read the photo. Try again, or fill the form in manually.',
+        apiError(
+          err,
+          'Could not read the photo. Try again, or fill the form in manually.',
+        ),
       )
     } finally {
       setExtracting(false)
@@ -73,19 +76,24 @@ function CreateListingForm() {
     setCreateError(null)
     setCreating(true)
     try {
-      await client.post('/listings/', {
-        title: draft.title,
-        description: draft.description,
-        category: draft.category,
-        condition: draft.condition,
-        price: draft.price,
-        latitude: parseFloat(draft.latitude),
-        longitude: parseFloat(draft.longitude),
-      })
+      // Multipart, not JSON — the photo that drove the extraction is saved with
+      // the listing. DRF coerces the numeric strings; axios sets the boundary.
+      const form = new FormData()
+      form.append('title', draft.title)
+      form.append('description', draft.description)
+      form.append('category', draft.category)
+      form.append('condition', draft.condition)
+      form.append('price', draft.price)
+      form.append('latitude', draft.latitude)
+      form.append('longitude', draft.longitude)
+      if (image) {
+        form.append('image', image)
+      }
+      await client.post('/listings/', form)
       navigate('/')
-    } catch {
+    } catch (err) {
       setCreateError(
-        'Could not create the listing. Check the fields and try again.',
+        apiError(err, 'Could not create the listing. Check the fields and try again.'),
       )
     } finally {
       setCreating(false)

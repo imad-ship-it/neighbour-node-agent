@@ -5,3 +5,4 @@ node_modules/
 .vscode/
 
 backend/db.sqlite3
+backend/media/

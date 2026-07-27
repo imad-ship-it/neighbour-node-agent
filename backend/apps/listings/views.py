@@ -5,14 +5,22 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Listing
+from .permissions import IsOwnerOrReadOnly
 from .serializers import ListingSerializer
-from .services import ExtractionError, extract_listing_from_image
+from .services import ExtractionError, InvalidImageError, extract_listing_from_image
 
 
 class ListingViewSet(viewsets.ModelViewSet):
     queryset = Listing.objects.all()
     serializer_class = ListingSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+
+    def get_permissions(self):
+        # Bookmarking is a POST against someone ELSE's listing by design, so the
+        # ownership check must not apply to it — being logged in is enough.
+        if self.action == "bookmark":
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
         serializer.save(lender=self.request.user)
@@ -53,6 +61,9 @@ class ListingExtractView(APIView):
 
         try:
             extraction = extract_listing_from_image(image_bytes, description)
+        except InvalidImageError as exc:
+            # Bad upload — the client's fault, so 400 rather than a server error.
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except ExtractionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 

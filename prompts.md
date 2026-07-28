@@ -396,6 +396,152 @@ redundant — removed the dead re-import.
 
 ---
 
+## Phase 3 — Hardening pass (Day 5)
+
+### 23. Frontend shell — navigation and styling
+
+**Prompt:** The frontend renders seeded data but nothing is clickable and it looks wrong.
+Audit and fix.
+
+**Result:** Three separate problems, none of them CSS tweaks. (1) There was **no navigation
+anywhere in the app** — not one `<Link>`; `/create`, `/login` and `/signup` were reachable
+only by typing the URL. (2) `App.css` was untouched Vite boilerplate (`.hero`, `#next-steps`)
+and **was never imported**, so `.listing-card` and `.btn` had no rules at all. (3) `Icon`
+rendered an empty `<span>` with no SVG, and `public/icons.svg` only held the starter's
+github/discord symbols — so the bookmark button was an invisible box.
+
+Added `components/Layout.jsx` (sticky header, nav, live auth state), rewrote `App.css` as a
+real stylesheet, gave `Icon` inline bookmark SVGs using `currentColor`, and dropped the
+starter's `text-align: center` / fixed `1126px` on `#root`.
+
+**Correction:** the bookmark button was firing a silent 401 when logged out. Now it only
+renders when a user is present, rather than failing invisibly.
+
+---
+
+### 24. Auth interceptor — stale token on public endpoints
+
+**Prompt:** Signup always fails with "try a different username" even for unused names.
+
+**Result:** Two bugs stacked. The axios request interceptor attached the bearer token to
+**every** request including `/auth/register/` — and because **DRF authenticates before it
+checks permissions**, an expired token makes the authenticator raise 401 on an `AllowAny`
+view; permissions never run. Login was immune only because SimpleJWT's `TokenObtainPairView`
+sets `authentication_classes = []`.
+
+Added a `PUBLIC_PATHS` skip-list in `client.js` and an `apiError()` helper that pulls the
+real message out of a DRF error body.
+
+**Correction:** the catch block reported *every* failure as a duplicate username — including
+a successful register followed by a failed login, which created accounts while telling the
+user they hadn't been created. Login, signup and both create-flow handlers now surface the
+actual server message.
+
+---
+
+### 25. JWT access-token lifetime
+
+**Prompt:** Users are being logged out a few minutes after logging in.
+
+**Result:** `SIMPLE_JWT` was never configured, so the access token used SimpleJWT's default
+**5-minute** lifetime while the frontend holds it in memory with no refresh flow. Set
+`ACCESS_TOKEN_LIFETIME` to 8 hours and `REFRESH_TOKEN_LIFETIME` to 1 day.
+
+---
+
+### 26. Extraction endpoint — async handler removed
+
+**Prompt:** `POST /api/listings/extract/` returns 500 on every request. Diagnose.
+
+**Result:** `SynchronousOnlyOperation`, raised inside SimpleJWT's `get_user()`. Django decides
+a view is async by inspecting its handlers, so `async def post` made it run the whole view on
+the event loop — but **DRF's `dispatch` is synchronous**, so DRF's authentication executed
+inside that loop and its ORM query blew up. It failed during authentication, before the
+handler was ever reached.
+
+DRF 3.17.1 has no async support at all (not one `async def` in its `views.py`), so the
+endpoint is now a plain sync view with a docstring explaining why. The two internal
+`sync_to_async` wrappers went with it — they were protecting code that never ran.
+
+**Correction:** this endpoint had never worked since the commit that introduced it. Under
+ASGI, Django already runs sync views in a threadpool, so nothing is lost.
+
+---
+
+### 27. Undecodable uploads return 400, not 500
+
+**Prompt:** Uploading a non-image (a PDF, a truncated JPEG) returns a 500 with a traceback.
+
+**Result:** `_prepare_image` was called **outside** every try block, so `PIL.UnidentifiedImageError`
+escaped the view's `except ExtractionError` and became an unhandled 500. Added a distinct
+`InvalidImageError`, raised from `_prepare_image` and mapped to **400** in the view — kept
+separate from `ExtractionError` (502) so bad client input and a failing pipeline don't share
+a status code.
+
+Guarded the whole decode block, not just `Image.open`: `convert()`/`thumbnail()` fail on
+truncated files and `DecompressionBombError` isn't an `OSError` subclass, so it needs listing
+explicitly.
+
+---
+
+### 28. Object-level permissions on Listing
+
+**Prompt:** Check whether the listing API enforces ownership on writes.
+
+**Result:** It did not. `IsAuthenticatedOrReadOnly` only asks *"are you logged in?"* — DRF
+runs an object-level check only if a permission class implements `has_object_permission`, and
+that one doesn't. Verified by having one account PATCH (200) and then DELETE (204) another
+user's listing. Added `listings/permissions.py` with `IsOwnerOrReadOnly` — safe methods pass,
+writes require `obj.lender == request.user` or `is_staff`.
+
+**Correction (the part worth recording):** adding it naively **breaks bookmarking**. Bookmark
+is a `POST` against a listing you deliberately *don't* own, and because the action calls
+`get_object()`, DRF runs the object check and every bookmark would 403. Fixed with a
+`get_permissions()` override dropping that one action to plain `IsAuthenticated`.
+
+---
+
+### 29. Save the uploaded photo with the listing
+
+**Prompt:** The photo drives extraction but the created listing has no image.
+
+**Result:** The create request was a JSON body of seven fields with the file never attached —
+so every uploaded photo was used for extraction and then discarded (0 of 44 listings had an
+image; `media/` didn't exist). Switched the create to `FormData` with the file appended, and
+added `backend/media/` to `.gitignore`.
+
+**Correction:** this introduced a regression I only caught when the UI showed a new listing as
+"on loan". On a **multipart** request DRF's `BooleanField.get_value()` reads an *absent* field
+as `False` — it assumes an unchecked HTML checkbox — so `is_available` stopped falling back to
+the model default. Same endpoint, same data, only the content type changed. Fixed by setting
+`is_available=True` explicitly in `perform_create` so it holds for any client, not just this
+form. My first verification of this change checked the image and latitude but not the boolean.
+
+---
+
+### 30. Register the custom User in the admin
+
+**Prompt:** `User` doesn't appear in the Django admin.
+
+**Result:** Swapping `AUTH_USER_MODEL` unregisters Django's built-in auth admin. Registered
+`User` explicitly, subclassing `BaseUserAdmin` — a plain `ModelAdmin` renders the password as
+an **editable hash field**, which silently corrupts credentials.
+
+---
+
+### 31. Provider error messages and dead env var
+
+**Prompt:** The Anthropic provider's `NotImplementedError` names `LLM_PROVIDER`, which no
+longer exists.
+
+**Result:** Left over from the role-registry refactor; the real settings are
+`EXTRACTION_PROVIDER` / `MATCHING_PROVIDER`. Fixed both provider messages. Grepping for the
+old name also turned up `LLM_PROVIDER=stub` still sitting in `.env` — a dead line, with
+neither real setting present. It only worked because both default to `"stub"` in settings.
+Replaced it with the two actual variables.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -414,3 +560,22 @@ redundant — removed the dead re-import.
   second kind of LLM call, the extraction-only stub silently failed validation. The fix is a
   prompt-aware stub that returns the right shape per call — otherwise "runs with no keys"
   quietly stops being true for the new feature.
+- **DRF authenticates before it checks permissions.** A stale or malformed token 401s an
+  `AllowAny` endpoint, because permissions never get to run. This one rule explains the signup
+  bug, why SimpleJWT's login view was immune, and why `IsAuthenticatedOrReadOnly` alone left
+  writes unguarded.
+- **Changing the content type changes the parsing rules.** Moving create from JSON to
+  multipart silently flipped `is_available` to `False`, because DRF treats an absent boolean
+  in HTML-form input as an unchecked checkbox. Same endpoint, same fields, different default.
+- **Verify the paths a change could break, not just the path it fixes.** Adding the ownership
+  permission would have 403'd every bookmark — the failing case was the one that looked
+  unrelated. Every fix since gets tested against the features around it.
+- **Django's autoreloader is not reliable here.** Several fixes appeared not to work because
+  the running process still held old bytecode. Worse, Django's 500 page reads source files
+  *fresh from disk*, so the traceback displays the new code while executing the old — the
+  page's source listing is not evidence of what's running. Restart `runserver` after backend
+  edits.
+- **An unhandled library exception becomes a 500.** DRF only converts `APIException`,
+  `Http404` and `PermissionDenied`; anything else propagates to Django. Third-party errors
+  (`UnidentifiedImageError`) need catching and re-raising as a typed error the view can map to
+  a real status code.

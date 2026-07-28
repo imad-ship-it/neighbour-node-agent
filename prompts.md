@@ -542,6 +542,98 @@ Replaced it with the two actual variables.
 
 ---
 
+## Phase 3 — Scaffold docs, agent wiring & memory (Day 6)
+
+### 32. README: architecture diagram, tech choices, model selection rationale
+
+**Prompt:** Week 5 deliverable — the README needs an architecture diagram, tech choices with
+reasoning, and a model selection rationale. Use Mermaid so GitHub renders it natively with no
+image files to maintain.
+
+**Result:** Added an `## Architecture` section with one Mermaid flowchart (React → DRF →
+service layer → provider registry → the two models), with `geo_search` on a dashed edge so it
+reads as a tool rather than a pipeline stage. Added a "Why" column to the tech-stack table and
+a `## Model selection rationale` section. Added `backend/.env.example` and changed the setup
+step from pasting a block to `cp .env.example .env`.
+
+**Correction:** the env table listed `anthropic` / `deepseek` as valid provider values without
+saying they raise `NotImplementedError` and need client libraries deliberately kept out of
+`requirements.txt`. Documented both, so the table stops promising something that doesn't work.
+
+---
+
+### 33. Model selection: Opus vs Haiku for vision extraction
+
+**Prompt:** Which model should extraction use, and what does a call actually cost?
+
+**Result:** Costed it from what the pipeline sends: image capped at 1568px → ~1,600 image
+tokens, ~200 prompt, ~100 output. About $0.012/call on Opus 4.8 against $0.0023 on Haiku 4.5.
+Chose Opus: four of the five extracted fields are trivial (short strings, validated enums), but
+`suggested_price` needs the model to identify the item and judge wear from the photo. Left
+extended thinking off and kept the 1568px cap — both multiply cost with no gain on a five-field
+extraction.
+
+**Correction:** the code was internally inconsistent. `MODEL` said `claude-opus-4-8` while
+`MAX_IMAGE_DIM = 1568` is the cap for the older vision tier, so it was paying Opus rates for
+lower-tier image fidelity. The commented call skeleton also paired `thinking={"type":
+"adaptive"}` with `max_tokens=1024`, where thinking and response share that budget and would
+have truncated the JSON. Dropped the thinking line and recorded the choice as a class comment
+so the code and the README agree.
+
+---
+
+### 34. Ranking step and the `/api/match/` endpoint
+
+**Prompt:** `understand_query()` and `retrieve_candidates()` work, but there's no third step
+and no HTTP route — the agent can only be run from the shell.
+
+**Result:** Added `rank_candidates()` (LLM call #2) and a `RankingResult` schema carrying only
+the model's output, since `run_id` / `candidate_count` / `degraded` are filled server-side.
+Wired `MatchView` and `matching/urls.py`. One `run_id` threads all three steps, so a whole
+agent run pulls out of `TraceLog` as a single ordered trace.
+
+**Correction:** two guards that earned their place. The model can return a `listing_id` that
+was never retrieved, so the service filters results against the ids it passed in. And a ranking
+failure degrades to distance-only ordering instead of 502-ing the search — a worse ranking is
+more useful than an error page, and the `degraded` flag was already in the schema for exactly
+this.
+
+---
+
+### 35. The prompt-aware stub had to echo real candidate ids
+
+**Prompt:** The match endpoint returns `candidate_count: 3` but `matches: []`.
+
+**Result:** Not a bug. The stub hardcoded `listing_id: 1`, and the hallucination filter
+correctly dropped it because seeded listings have ids in the 280s — correct behaviour that
+reads as broken. Changed the stub to parse ids out of the rank prompt (`id=(\d+)`) and rank
+the real candidates, so the no-key demo produces a plausible result.
+
+**Correction:** branch ordering in the stub is load-bearing. The rank prompt embeds
+`query.model_dump_json()`, and a serialised `MatchQuery` contains the key `"keywords"` — so a
+ranking call also matches the query-understanding branch. The `matched_factors` check has to
+come first, or ranking calls get `MatchQuery` JSON back and fail validation.
+
+---
+
+### 36. Per-user session memory for query refinement
+
+**Prompt:** Week 6 goal — memory layer. `understand_query()` already accepts `prior_query` and
+builds a refinement prompt from it; nothing ever passes one.
+
+**Result:** `MatchSession` model (one row per user via `OneToOneField`) holding the last
+structured query, run id and turn count. `load_prior_query()` / `remember_query()` / `forget()`
+in the service layer, wired into the view behind a `fresh` flag to start over, and registered
+in the admin so stored memory is inspectable during a demo. Verified: turn 2 said only
+"actually only within 5km" and the agent carried `['cordless', 'drill']` and `$50` forward,
+with `has_prior: True` recorded in the step-0 trace.
+
+**Correction:** memory needs an expiry. Without the 30-minute TTL a search from yesterday would
+silently constrain today's — a constraint the user can't see, didn't ask for and can't explain.
+Stale memory is worse than no memory.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -579,3 +671,18 @@ Replaced it with the two actual variables.
   `Http404` and `PermissionDenied`; anything else propagates to Django. Third-party errors
   (`UnidentifiedImageError`) need catching and re-raising as a typed error the view can map to
   a real status code.
+- **pre-commit loops forever if `git add` misses a file the hooks fixed.** The hooks run
+  against *staged* content, fix the working tree, then abort. Staging only part of the change
+  next time re-stages the same unfixed file, so the hook fixes it again and aborts again — I
+  went three rounds before spotting it. After an abort, `git status --short` and stage
+  everything showing `MM`. Two commits had silently never landed by the time I checked.
+- **Run the README's own setup from a fresh clone.** Cloning into a temp directory and
+  following my own instructions caught `.env.example` being untracked — the `cp .env.example
+  .env` step I'd just documented would have failed for anyone but me. Nothing else in the
+  setup, including the full `requirements.txt` install, was wrong; the one gap was invisible
+  from inside a working tree.
+- **A model string is not a model decision.** The provider named Opus while `MAX_IMAGE_DIM`
+  was tuned for a cheaper tier and the call skeleton carried settings that contradicted both.
+  Nothing errored, because none of it had ever run. Unexecuted code drifts silently — the
+  README forced the inconsistency into the open by making me write down *why* the model was
+  chosen.

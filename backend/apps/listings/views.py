@@ -23,7 +23,11 @@ class ListingViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def perform_create(self, serializer):
-        serializer.save(lender=self.request.user)
+        # is_available is forced rather than left to the model default: on a
+        # multipart request DRF's BooleanField reads an absent field as False
+        # (it assumes an unchecked HTML checkbox), so the default never applies.
+        # A brand-new listing is always available; it's marked on loan later.
+        serializer.save(lender=self.request.user, is_available=True)
 
     @action(detail=True, methods=["post"])
     def bookmark(self, request, pk=None):

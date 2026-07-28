@@ -60,3 +60,14 @@ class MatchResponse(BaseModel):
         default=False,
         description="True if we fell back (e.g. LLM failed → distance-only ranking).",
     )
+    refined: bool = Field(
+        default=False,
+        description="True if this search built on the user's previous query.",
+    )
+
+
+class RankingResult(BaseModel):
+    """Just the model's ranking output. The service wraps this into a
+    MatchResponse, adding run_id, counts and the degraded flag."""
+
+    matches: list[RankedMatch]

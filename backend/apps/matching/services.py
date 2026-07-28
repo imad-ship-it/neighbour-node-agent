@@ -1,12 +1,15 @@
 import math
 import time
+from datetime import timedelta
 
 from apps.core.services.llm import get_provider
 from apps.core.services.tracing import trace_call
 from apps.core.services.validation import LLMValidationError, generate_and_validate
 from apps.listings.models import Listing
+from django.utils import timezone
 
-from .schemas import MatchQuery
+from .models import MatchSession
+from .schemas import MatchQuery, MatchResponse, RankedMatch, RankingResult
 
 
 class MatchError(Exception):
@@ -16,6 +19,7 @@ class MatchError(Exception):
 EARTH_RADIUS_KM = 6371
 DEFAULT_RADIUS_KM = 25  # used when the user didn't state a distance
 CANDIDATE_LIMIT = 25  # cap: past this you pay tokens for listings that will never rank
+MEMORY_TTL_MINUTES = 30  # older than this, a new message starts a fresh search
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -161,3 +165,119 @@ def retrieve_candidates(
         status="ok",
     )
     return capped
+
+
+def _build_rank_prompt(query, candidates, error_context=None):
+    lines = "\n".join(
+        f"- id={listing.id} | {listing.title} | {listing.category} | "
+        f"{listing.condition} | ${listing.price} | {distance:.1f}km away"
+        for listing, distance in candidates
+    )
+    prompt = (
+        "You rank borrowable items against a neighbour's request. "
+        "Return ONLY a JSON object with one field:\n"
+        "- matches: array, best first, each with listing_id (int, must be one "
+        "of the ids below), score (0-1), rank (int from 1), explanation "
+        "(short Markdown for the user), matched_factors (array of short "
+        "strings), concerns (array of short strings)\n"
+        "Weigh category fit, condition, price and distance. Leave out "
+        "listings that clearly don't fit rather than padding the list.\n"
+        "No markdown fences, no text outside the JSON.\n\n"
+        f"Request: {query.model_dump_json()}\n\nCandidates:\n{lines}"
+    )
+    if error_context:
+        prompt += (
+            "\n\nYour previous response was rejected:\n"
+            f"{error_context}\nReturn corrected JSON that fixes it."
+        )
+    return prompt
+
+
+def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None):
+    """LLM call #2: score and explain the retrieved candidates.
+
+    Degrades to distance-only ordering rather than failing the whole search —
+    a worse ranking is more useful to the user than an error page.
+    """
+    if not candidates:
+        return MatchResponse(matches=[], candidate_count=0, run_id=run_id)
+
+    provider = get_provider("matching", override=override)
+    valid_ids = {listing.id for listing, _ in candidates}
+
+    def _call(attempt, error_context):
+        prompt = _build_rank_prompt(query, candidates, error_context)
+        started = time.perf_counter()
+        status, raw = "ok", ""
+        try:
+            raw = provider.generate(prompt)
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            trace_call(
+                agent_name="match_rank",
+                arguments={"candidates": len(candidates)},
+                raw_response=raw,
+                run_id=run_id,
+                step_index=step_index,
+                tool_name="llm.generate",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status=status,
+            )
+        return raw
+
+    try:
+        result = generate_and_validate(_call, RankingResult, max_retries=1)
+    except Exception:
+        # Deliberately broad: a bad ranking should never break search.
+        # Candidates are already nearest-first, so fall back to that order.
+        return MatchResponse(
+            matches=[
+                RankedMatch(
+                    listing_id=listing.id,
+                    score=0.0,
+                    rank=i,
+                    explanation=f"{distance:.1f} km away.",
+                )
+                for i, (listing, distance) in enumerate(candidates, start=1)
+            ],
+            candidate_count=len(candidates),
+            run_id=run_id,
+            degraded=True,
+        )
+
+    # The model can invent an id — drop anything that wasn't actually retrieved.
+    matches = [m for m in result.matches if m.listing_id in valid_ids]
+    return MatchResponse(
+        matches=matches, candidate_count=len(candidates), run_id=run_id
+    )
+
+
+def load_prior_query(user):
+    """The user's last structured query, or None if there isn't a recent one.
+
+    Stale memory is worse than none: a search from yesterday silently
+    constraining today's is a bug the user can't see or explain.
+    """
+    session = MatchSession.objects.filter(user=user).first()
+    if session is None or session.last_query is None:
+        return None
+    if timezone.now() - session.updated_at > timedelta(minutes=MEMORY_TTL_MINUTES):
+        return None
+    return MatchQuery(**session.last_query)
+
+
+def remember_query(user, query, run_id):
+    """Persist the query so the next message can refine it."""
+    session, _ = MatchSession.objects.get_or_create(user=user)
+    session.last_query = query.model_dump(mode="json")
+    session.last_run_id = run_id
+    session.turn_count += 1
+    session.save()
+    return session
+
+
+def forget(user):
+    """Drop the thread — the next message starts a fresh search."""
+    MatchSession.objects.filter(user=user).update(last_query=None, turn_count=0)

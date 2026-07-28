@@ -4,6 +4,9 @@ from .base import LLMProvider
 
 
 class AnthropicLLMProvider(LLMProvider):
+    # Opus for vision extraction: of the five fields, `suggested_price` is the one that
+    # needs the model to identify the item and judge wear from the photo. Extended
+    # thinking stays off — five fields don't need it, and it bills at the output rate.
     MODEL = "claude-opus-4-8"
     TIMEOUT_SECONDS = 30.0
 
@@ -32,8 +35,7 @@ class AnthropicLLMProvider(LLMProvider):
         #   try:
         #       response = self._client.messages.create(
         #           model=self.MODEL,
-        #           max_tokens=1024,
-        #           thinking={"type": "adaptive"},
+        #           max_tokens=1024,   # ample for a 5-field JSON draft
         #           messages=[{"role": "user", "content": content}],
         #       )
         #       return "".join(b.text for b in response.content if b.type == "text")

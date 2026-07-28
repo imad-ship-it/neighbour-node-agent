@@ -37,19 +37,45 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 
 ---
 
+## Architecture
+
+```mermaid
+flowchart TD
+    UI["React 19 + Vite<br/>Listings · CreateListingForm"] -->|"axios + JWT"| API["Django REST Framework<br/>/api/auth/ · /api/listings/"]
+    API --> EXT["listings/services.py<br/>extract_listing_from_image()"]
+    API --> MATCH["matching/services.py<br/>understand_query() → retrieve_candidates()"]
+    EXT --> REG["core/services/llm<br/>get_provider(role, override)"]
+    MATCH --> REG
+    REG -->|"EXTRACTION_PROVIDER"| CLAUDE["Anthropic Claude<br/>vision extraction"]
+    REG -->|"MATCHING_PROVIDER"| DS["DeepSeek<br/>structured matching"]
+    REG -->|"default"| STUB["StubLLMProvider<br/>no API key"]
+    MATCH -.->|"tool call"| GEO["geo_search<br/>haversine + radius"]
+    GEO --> DB[("SQLite")]
+    EXT --> TRACE["TraceLog"]
+    MATCH --> TRACE
+```
+
+The two AI paths — photo extraction and query matching — both go through one provider
+registry, which resolves each **role** to a model independently. `geo_search` hangs off
+the matching path as a **tool**: a plain callable the agent invokes for hard distance
+filtering, so the model never does arithmetic itself.
+
+---
+
 ## Tech stack
 
-| Layer | Choice |
-|---|---|
-| API | Django 6.0, Django REST Framework 3.17 |
-| Auth | djangorestframework-simplejwt (JWT) |
-| Config | python-decouple (`.env`) |
-| AI schema | Pydantic v2 |
-| Images | Pillow |
-| Sample data | Faker |
-| Frontend | React 19, Vite, React Router, TanStack Query, axios |
-| CORS | django-cors-headers |
-| Formatting | black, isort (`--profile black`), ruff via pre-commit |
+| Layer | Choice | Why |
+|---|---|---|
+| API | Django 6.0, Django REST Framework 3.17 | ViewSets + serializers give CRUD, auth and permissions without hand-rolling them |
+| Auth | djangorestframework-simplejwt (JWT) | Stateless tokens suit a separate React origin; no server-side session store |
+| Config | python-decouple (`.env`) | Keys and secrets stay out of git and out of `settings.py` |
+| AI schema | Pydantic v2 | `category`/`condition` reuse the Django model enums, so the LLM *cannot* return an invalid value |
+| Images | Pillow | Resize/re-encode before upload — caps token cost and rejects non-images early |
+| Sample data | Faker | Realistic volume for geo-search testing without hand-writing fixtures |
+| Frontend | React 19, Vite, React Router, TanStack Query, axios | TanStack Query handles caching, refetch and loading state, so no Redux layer is needed |
+| Database | SQLite (dev) | Zero setup for a fresh clone; Postgres deferred to deployment |
+| CORS | django-cors-headers | React dev server runs on a different origin than the API |
+| Formatting | black, isort (`--profile black`), ruff via pre-commit | Style is enforced automatically, never reviewed by hand |
 
 ---
 
@@ -99,16 +125,15 @@ venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Create `backend/.env` (this file is gitignored — never commit it):
+Create your `.env` from the template (`.env` is gitignored — never commit it):
 
-```dotenv
-SECRET_KEY=replace-with-any-dev-secret
-DEBUG=True
-EXTRACTION_PROVIDER=stub
-MATCHING_PROVIDER=stub
-ANTHROPIC_API_KEY=
-DEEPSEEK_API_KEY=
+```bash
+cp .env.example .env
+# Windows (PowerShell): Copy-Item .env.example .env
 ```
+
+`SECRET_KEY` has no default — Django won't start until it's set. Any random string works
+for development. The provider defaults are `stub`, so no API keys are needed.
 
 Migrate, create an admin user, and seed sample data:
 
@@ -134,16 +159,66 @@ Run both servers at once (two terminals). The React app calls the API at
 
 ## Configuration
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `SECRET_KEY` | Django secret (required) | — |
-| `DEBUG` | Debug mode | `False` |
-| `EXTRACTION_PROVIDER` | LLM for photo extraction: `stub` \| `anthropic` \| `deepseek` | `stub` |
-| `MATCHING_PROVIDER` | LLM for matching/ranking | `stub` |
-| `ANTHROPIC_API_KEY` | Claude key (only if provider = `anthropic`) | empty |
-| `DEEPSEEK_API_KEY` | DeepSeek key (only if provider = `deepseek`) | empty |
+| Variable | Purpose | Valid values | Default |
+|---|---|---|---|
+| `SECRET_KEY` | Django secret — **required**, no default | any string | — |
+| `DEBUG` | Debug mode | `True` \| `False` | `False` |
+| `EXTRACTION_PROVIDER` | LLM role: photo → draft listing | `stub` \| `anthropic` \| `deepseek` | `stub` |
+| `MATCHING_PROVIDER` | LLM role: free text → search intent, ranking | `stub` \| `anthropic` \| `deepseek` | `stub` |
+| `ANTHROPIC_API_KEY` | Claude key — only read if a role is set to `anthropic` | key string | empty |
+| `DEEPSEEK_API_KEY` | DeepSeek key — only read if a role is set to `deepseek` | key string | empty |
 
 With the defaults, the app runs entirely on the stub provider — no keys, no cost.
+
+> **Live providers are not wired yet.** Both roles work end-to-end on `stub`. Setting a
+> role to `anthropic` or `deepseek` currently raises `NotImplementedError` (the provider
+> `generate()` bodies are skeletons), and needs the client library installed — those are
+> deliberately not in `requirements.txt` so a stub-only clone stays dependency-free:
+>
+> ```bash
+> pip install anthropic   # for EXTRACTION_PROVIDER=anthropic
+> pip install openai      # for MATCHING_PROVIDER=deepseek (OpenAI-compatible API)
+> ```
+
+---
+
+## Model selection rationale
+
+Each role resolves its provider independently in
+[`core/services/llm/__init__.py`](backend/apps/core/services/llm/__init__.py), so the two
+jobs are matched to different models on their merits — and the same input can be routed to
+two models for comparison via the `override` argument.
+
+**Extraction → Claude (Opus 4.8, `claude-opus-4-8`).** The input is an *image*, which rules
+out text-only models entirely, and the output must be schema-valid JSON. Of the five
+extracted fields, four are easy: `title` and `description` are short, and `category` and
+`condition` are constrained enums that the Pydantic schema validates against the Django
+model choices. **`suggested_price` is the hard one** — pricing an item means identifying
+what it is, often reading a brand or model off the object itself, and judging wear from the
+photo. That is where vision quality actually shows up, and it is the field that makes the
+feature useful rather than a captioner.
+
+Two cost levers are deliberately left off:
+
+- **Image input is capped at 1568px** on the long edge (`MAX_IMAGE_DIM`). Higher resolution
+  roughly triples image tokens; it is worth raising only if the model is measurably
+  misreading small text on items.
+- **Extended thinking is off.** Filling five fields from a photo does not need multi-step
+  reasoning, and thinking tokens bill at the (5×) output rate.
+
+That lands at roughly **$0.012 per extraction** (~1,800 input / ~100 output tokens), and the
+24-hour SHA-256 result cache means repeated development runs on the same photo cost nothing.
+
+**Matching → DeepSeek (`deepseek-chat`).** This role is text-only — free text in, a
+structured `MatchQuery` out, then ranking with Markdown explanations. It is structured
+reasoning over short inputs, which DeepSeek does well at a fraction of frontier pricing.
+It is also *not* a candidate for extraction: `deepseek-chat` has no vision.
+
+**Why the stub is the default.** Extraction failure modes (bad JSON, invalid enum, wrong
+shape) are caught by `generate_and_validate`, not by the model, so the whole pipeline —
+prompt building, parsing, validation, the capped retry, tracing — is exercised and testable
+with a deterministic fake and zero spend. Live keys change *which* provider answers, not the
+shape of the code around it.
 
 ---
 

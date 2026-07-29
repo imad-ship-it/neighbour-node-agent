@@ -6,6 +6,11 @@ it without either owning it. Rules only inspect the row itself: they detect
 internal INCONSISTENCY, not dishonesty, and the flag messages say so.
 """
 
+import time
+from collections import Counter
+from uuid import uuid4
+
+from apps.core.services.tracing import trace_call
 from apps.listings.models import Listing
 
 from .schemas import TrustFlag, TrustReport
@@ -120,17 +125,51 @@ RULES = (_check_price, _check_title_category, _check_description, _check_photo)
 
 
 def check_listing(listing) -> TrustReport:
-    """Run every rule against one listing."""
+    """Run every rule against one listing.
+
+    Deliberately untraced: this is the inner primitive, called once per candidate.
+    Tracing here would write a row per listing instead of a row per tool call.
+    """
     flags = [flag for rule in RULES if (flag := rule(listing)) is not None]
     return TrustReport(listing_id=listing.id, flags=flags)
 
 
-def check_listings(listings) -> dict[int, TrustReport]:
-    """Reports keyed by listing id, for annotating a batch of candidates."""
-    return {listing.id: check_listing(listing) for listing in listings}
+def check_listings(
+    listings, *, run_id="", step_index=0, agent_name="match_trust"
+) -> dict[int, TrustReport]:
+    """Reports keyed by listing id, for annotating a batch of candidates.
+
+    `agent_name` is what separates the two callers in TraceLog: the match agent
+    leaves the default, the MCP server passes "mcp".
+    """
+    started = time.perf_counter()
+    reports = {listing.id: check_listing(listing) for listing in listings}
+    severities = Counter(
+        flag.severity for report in reports.values() for flag in report.flags
+    )
+    flagged = sum(1 for report in reports.values() if report.flags)
+    trace_call(
+        agent_name=agent_name,
+        arguments={"listing_ids": [listing.id for listing in listings]},
+        raw_response=(
+            f"{flagged} of {len(reports)} flagged — "
+            f"high {severities['high']}, medium {severities['medium']}, "
+            f"low {severities['low']}"
+        ),
+        # A run with no id can't be read back as a trace. Mint one rather than
+        # writing an orphan row.
+        run_id=run_id or uuid4().hex,
+        step_index=step_index,
+        tool_name="trust_check",
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        status="ok",
+    )
+    return reports
 
 
-def check_listing_by_id(listing_id: int) -> TrustReport:
+def check_listing_by_id(
+    listing_id: int, *, run_id="", step_index=0, agent_name="match_trust"
+) -> TrustReport:
     """Look up and check.
 
     Raises TrustCheckError with a message the caller can act on — an MCP client
@@ -140,5 +179,18 @@ def check_listing_by_id(listing_id: int) -> TrustReport:
     try:
         listing = Listing.objects.get(pk=listing_id)
     except Listing.DoesNotExist as exc:
+        # An errored tool call is still a tool call — it belongs in the trace.
+        trace_call(
+            agent_name=agent_name,
+            arguments={"listing_id": listing_id},
+            raw_response=f"Listing {listing_id} not found.",
+            run_id=run_id or uuid4().hex,
+            step_index=step_index,
+            tool_name="trust_check",
+            status="error",
+        )
         raise TrustCheckError(f"Listing {listing_id} not found.") from exc
-    return check_listing(listing)
+    reports = check_listings(
+        [listing], run_id=run_id, step_index=step_index, agent_name=agent_name
+    )
+    return reports[listing_id]

@@ -1,6 +1,8 @@
 import math
 import time
 from datetime import timedelta
+from decimal import Decimal
+from uuid import uuid4
 
 from apps.core.services.llm import get_provider
 from apps.core.services.tracing import trace_call
@@ -62,6 +64,49 @@ def search_listings_by_distance(lat, lng, radius_km, filters=None):
             results.append((listing, distance))
 
     results.sort(key=lambda pair: pair[1])
+    return results
+
+
+def _json_safe(value):
+    """TraceLog.arguments is a JSONField, and a price filter arrives from
+    MatchQuery as a Decimal, which json.dumps refuses."""
+    return str(value) if isinstance(value, Decimal) else value
+
+
+def geo_search(
+    lat,
+    lng,
+    radius_km,
+    filters=None,
+    *,
+    run_id="",
+    step_index=0,
+    agent_name="match_retrieve",
+):
+    """Traced wrapper over search_listings_by_distance.
+
+    The shape both the match agent and the MCP server call, so one tool_name
+    covers both paths and a geo_search row reads the same wherever it came from.
+    The untraced function underneath stays available for callers that don't want
+    a TraceLog row (tests, the shell).
+    """
+    started = time.perf_counter()
+    results = search_listings_by_distance(lat, lng, radius_km, filters)
+    trace_call(
+        agent_name=agent_name,
+        arguments={
+            "lat": lat,
+            "lng": lng,
+            "radius_km": radius_km,
+            "filters": {k: _json_safe(v) for k, v in (filters or {}).items()},
+        },
+        raw_response=f"{len(results)} within radius",
+        run_id=run_id or uuid4().hex,
+        step_index=step_index,
+        tool_name="geo_search",
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        status="ok",
+    )
     return results
 
 
@@ -143,28 +188,12 @@ def retrieve_candidates(
         filters["price__lte"] = query.max_price
     radius = query.max_distance_km or DEFAULT_RADIUS_KM
 
-    started = time.perf_counter()
-    results = search_listings_by_distance(
-        lat, lng, radius, filters
+    # geo_search writes the TraceLog row — don't trace again here, or every
+    # retrieval leaves two geo_search rows in the same run.
+    results = geo_search(
+        lat, lng, radius, filters, run_id=run_id, step_index=step_index
     )  # already nearest-first
-    capped = results[:limit]
-
-    trace_call(
-        agent_name="match_retrieve",
-        arguments={
-            "max_price": str(query.max_price) if query.max_price is not None else None,
-            "radius_km": radius,
-            "availability": True,
-            "limit": limit,
-        },
-        raw_response=f"{len(results)} within radius, capped to {len(capped)}",
-        run_id=run_id,
-        step_index=step_index,
-        tool_name="geo_search",
-        duration_ms=int((time.perf_counter() - started) * 1000),
-        status="ok",
-    )
-    return capped
+    return results[:limit]
 
 
 def _build_rank_prompt(query, candidates, error_context=None):

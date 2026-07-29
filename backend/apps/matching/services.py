@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from .models import MatchSession
 from .schemas import MatchQuery, MatchResponse, RankedMatch, RankingResult
+from .trust import check_listings
 
 
 class MatchError(Exception):
@@ -176,12 +177,19 @@ def understand_query(text, prior_query=None, *, run_id="", step_index=0, overrid
 def retrieve_candidates(
     query, lat, lng, *, run_id="", step_index=1, limit=CANDIDATE_LIMIT
 ):
-    """Step 2 (no LLM): turn a MatchQuery's HARD constraints into a DB query.
+    """Step 2 (no LLM): turn a MatchQuery's HARD constraints into a DB query,
+    then annotate what survives with a trust report.
 
     Hard filters only — availability, price ceiling, radius. Category and condition are
     deliberately NOT filtered here: they're soft signals the ranker weighs, so a
     wrong-category-but-nearby listing still surfaces as a candidate to be ranked down.
     The model never does arithmetic filtering.
+
+    Returns (listing, distance_km, trust_report) triples. Trust-checking happens
+    HERE, between retrieval and compaction, so the flags reach the ranking prompt
+    rather than being computed after the model has already chosen.
+
+    Writes two TraceLog rows: geo_search at `step_index`, trust_check at the next.
     """
     filters = {"is_available": True}
     if query.max_price is not None:
@@ -193,14 +201,34 @@ def retrieve_candidates(
     results = geo_search(
         lat, lng, radius, filters, run_id=run_id, step_index=step_index
     )  # already nearest-first
-    return results[:limit]
+    capped = results[:limit]
+
+    # Annotate AFTER capping: no point trust-checking listings already discarded.
+    reports = check_listings(
+        [listing for listing, _ in capped],
+        run_id=run_id,
+        step_index=step_index + 1,
+    )
+    return [(listing, distance, reports[listing.id]) for listing, distance in capped]
+
+
+def _format_flags(report):
+    """Compact trust summary for one candidate line, empty when the listing is
+    clean — a clean listing costs no tokens and reads as unremarkable."""
+    if report is None or not report.flags:
+        return ""
+    codes = ", ".join(f"{flag.code}({flag.severity})" for flag in report.flags)
+    return f" | flags: {codes}"
 
 
 def _build_rank_prompt(query, candidates, error_context=None):
+    # Keep the "- id={n} |" prefix exactly: the stub provider parses candidate ids
+    # out of this prompt with r"id=(\d+)" to rank real listings with no API key.
     lines = "\n".join(
         f"- id={listing.id} | {listing.title} | {listing.category} | "
         f"{listing.condition} | ${listing.price} | {distance:.1f}km away"
-        for listing, distance in candidates
+        f"{_format_flags(report)}"
+        for listing, distance, report in candidates
     )
     prompt = (
         "You rank borrowable items against a neighbour's request. "
@@ -211,6 +239,9 @@ def _build_rank_prompt(query, candidates, error_context=None):
         "strings), concerns (array of short strings)\n"
         "Weigh category fit, condition, price and distance. Leave out "
         "listings that clearly don't fit rather than padding the list.\n"
+        "Some candidates carry trust flags from an automated consistency check. "
+        "Treat a high-severity flag as a reason to downrank or drop the listing, "
+        "and repeat the reason in concerns so the user can see it.\n"
         "No markdown fences, no text outside the JSON.\n\n"
         f"Request: {query.model_dump_json()}\n\nCandidates:\n{lines}"
     )
@@ -232,7 +263,7 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
         return MatchResponse(matches=[], candidate_count=0, run_id=run_id)
 
     provider = get_provider("matching", override=override)
-    valid_ids = {listing.id for listing, _ in candidates}
+    valid_ids = {listing.id for listing, _, _ in candidates}
 
     def _call(attempt, error_context):
         prompt = _build_rank_prompt(query, candidates, error_context)
@@ -268,8 +299,12 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
                     score=0.0,
                     rank=i,
                     explanation=f"{distance:.1f} km away.",
+                    # The ranker is gone, but the trust flags are deterministic and
+                    # still worth showing — a degraded result shouldn't also be a
+                    # silent one.
+                    concerns=[flag.code for flag in report.flags],
                 )
-                for i, (listing, distance) in enumerate(candidates, start=1)
+                for i, (listing, distance, report) in enumerate(candidates, start=1)
             ],
             candidate_count=len(candidates),
             run_id=run_id,

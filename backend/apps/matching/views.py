@@ -16,8 +16,9 @@ from .services import (
 
 
 class MatchView(APIView):
-    """Three-step agent: understand the request, retrieve nearby candidates,
-    then rank them with explanations. One run_id ties all three to TraceLog."""
+    """Four-step agent: understand the request, retrieve nearby candidates,
+    trust-check them, then rank with explanations. One run_id ties all four to
+    TraceLog."""
 
     permission_classes = [permissions.IsAuthenticated]
 
@@ -53,7 +54,8 @@ class MatchView(APIView):
 
         remember_query(request.user, query, run_id)
 
+        # retrieve_candidates writes two steps: geo_search at 1, trust_check at 2.
         candidates = retrieve_candidates(query, lat, lng, run_id=run_id, step_index=1)
-        result = rank_candidates(query, candidates, run_id=run_id, step_index=2)
+        result = rank_candidates(query, candidates, run_id=run_id, step_index=3)
         result.refined = prior is not None
         return Response(result.model_dump(mode="json"), status=status.HTTP_200_OK)

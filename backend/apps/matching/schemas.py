@@ -1,7 +1,8 @@
 from decimal import Decimal
+from typing import Literal
 
 from apps.listings.models import Listing  # reuse the Category/Condition enums
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class MatchQuery(BaseModel):
@@ -71,3 +72,45 @@ class RankingResult(BaseModel):
     MatchResponse, adding run_id, counts and the degraded flag."""
 
     matches: list[RankedMatch]
+
+
+# Ordering so a report can name its worst flag. Kept next to the schema because
+# it's part of the contract MCP clients read, not an implementation detail.
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+class TrustFlag(BaseModel):
+    """One rule that fired on one listing.
+
+    Structured, not prose: `code` is stable and machine-readable so a client can
+    branch on it, `message` is for a human reading a trace, and `evidence` carries
+    the values that triggered it so the judgement can be checked without re-running
+    the rule.
+    """
+
+    code: str = Field(description="Stable rule id, e.g. 'price_out_of_range'.")
+    severity: Literal["low", "medium", "high"]
+    message: str = Field(description="One short line, for a human.")
+    evidence: dict = Field(
+        default_factory=dict, description="The values the rule fired on."
+    )
+
+
+class TrustReport(BaseModel):
+    """Every rule's verdict on one listing. No flags = nothing detectable was wrong."""
+
+    listing_id: int
+    flags: list[TrustFlag] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def highest_severity(self) -> str | None:
+        """The worst flag present, or None when the listing is clean.
+
+        A computed_field, not a plain property: without the decorator it would be
+        absent from model_dump(), so it would vanish from the MCP tool's JSON and
+        from the ranking prompt.
+        """
+        if not self.flags:
+            return None
+        return max(self.flags, key=lambda f: SEVERITY_ORDER[f.severity]).severity

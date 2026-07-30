@@ -55,14 +55,22 @@ def _prepare_image(image_bytes: bytes) -> tuple[str, str]:
 def _build_prompt(error_context: str | None = None, description: str = "") -> str:
     categories = ", ".join(Listing.Category.values)
     conditions = ", ".join(Listing.Condition.values)
+    # The framing matters more than it looks. An earlier version said "a second-hand
+    # item" with an unqualified USD price, and live Haiku priced all three test photos
+    # at RESALE value ($25 for a blender, $45 for a lamp) — correct behaviour for the
+    # prompt it was given, wrong for a lending marketplace. Say what the number means.
     prompt = (
-        "You are extracting structured data about a second-hand item from its photo.\n"
+        "You are extracting structured data about an item a neighbour is offering to "
+        "LEND OUT to people nearby, from its photo.\n"
         "Return ONLY a JSON object with these exact fields:\n"
         "- title: short item name\n"
-        "- description: one or two sentences\n"
+        "- description: one or two sentences about the ITEM ITSELF — ignore "
+        "backgrounds, props and staging that aren't part of what's being lent\n"
         f"- category: MUST be exactly one of: {categories}\n"
         f"- condition: MUST be exactly one of: {conditions}\n"
-        "- suggested_price: a number in USD, e.g. 25.00\n"
+        "- suggested_price: the DAILY LENDING RATE in USD — what a neighbour would "
+        "charge to borrow this for one day, NOT what the item costs to buy, "
+        "e.g. 8.00\n"
         "Do not wrap the JSON in markdown code fences. "
         "Do not write any text before or after the JSON."
     )

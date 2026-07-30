@@ -833,6 +833,95 @@ asserting `MatchError` instead of the degrade path it claims to cover.
 
 ---
 
+### 46. Going live on Claude, and the three things a stub cannot tell you
+
+**Prompt:** Take extraction live on the cheapest vision-capable tier with capped
+`max_tokens`, run three real photos, and check what the stub structurally cannot simulate:
+whether responses actually arrive fenced, whether validation passes first try or triggers
+the retry, and whether extracted values are plausible.
+
+**Result:** Switched `AnthropicLLMProvider` from `claude-opus-4-8` to `claude-haiku-4-5`
+(~$0.0023/call against ~$0.012) and filled in the real `messages.create` call — image block
+before text, `max_tokens=512` as a ceiling rather than a target, no retry loop of its own
+because the SDK already retries 429/5xx and `generate_and_validate` owns the validation
+retry. Three photos chosen to isolate different failure modes: a battered angle grinder
+(wear judgement, partial crop), a desk lamp (category ambiguity), and a Magic Bullet blender
+(legible branding).
+
+Three answers, six live calls, about $0.014:
+
+- **Fenced: 6 of 6.** The prompt says "Do not wrap the JSON in markdown code fences" and
+  Haiku wrapped it every single time. `strip_code_fences` is not defensive dead code, it is
+  the only reason the pipeline parses at all. The stub happened to return fenced output too
+  — that was luck, and now it's evidence.
+- **Retry: never fired.** One call per photo, validation passed first try each time. Even
+  the ambiguity test didn't fail: the closed enum means the model cannot return an *invalid*
+  category, only a debatable one (it picked `furniture` for the lamp). So the live retry path
+  is still only covered by unit tests. Logging that as a real gap rather than a pass.
+- **Brand reading works on the cheap tier.** It returned "Magic Bullet Blender" from the
+  logo. That is precisely the capability the README's model-selection rationale claims
+  justifies Opus. Condition also varied for the right reasons — `fair` on the grinder with
+  "visible signs of wear", `like_new` on the other two — so that field is real judgement, not
+  a default.
+
+**Correction:** switching to Haiku also fixed the inconsistency logged in entry 33.
+`MAX_IMAGE_DIM = 1568` is the cap for the older vision tier; Opus 4.7+ reads up to 2576px, so
+the old pairing paid frontier rates for lower-tier image fidelity. The code is now internally
+consistent — but the README still argues for Opus, so the docs and the code now disagree in
+the opposite direction. Entry 33's lesson, arriving a second time.
+
+**Correction:** two Haiku-specific API constraints that would have been 400s — `effort` is
+rejected on Haiku 4.5, and Haiku predates adaptive thinking so the `thinking` parameter must
+be omitted entirely rather than set to `disabled`. Checked the installed SDK's current
+contract instead of carrying over the Opus-era call shape.
+
+---
+
+### 47. The price was wrong because the prompt never said what the price meant
+
+**Prompt:** Read the extracted values critically — a wildly wrong `suggested_price` is a
+prompt problem, not a parsing one.
+
+**Result:** All three first-run prices were wrong in the same direction: $25 for the blender,
+$45 for the lamp, $18 for the grinder. Those are **resale values**, not lending rates — a
+Magic Bullet retails around $30. Wrong the same way three times out of three is systematic,
+not noise.
+
+The cause was in the prompt's own first line: *"You are extracting structured data about a
+**second-hand item** from its photo"*, with `suggested_price: a number in USD`. This is a
+**lending** marketplace, and nothing in the prompt said so. The model priced the object
+because that is what it was asked to do.
+
+Rewrote three lines — the framing ("an item a neighbour is offering to LEND OUT"), the price
+field ("the DAILY LENDING RATE in USD ... NOT what the item costs to buy"), and the
+description ("about the ITEM ITSELF — ignore backgrounds, props and staging", because the
+blender description had been narrating the marketing photo's fruit). Same model, same
+images, prompt change only:
+
+| Item | Before | After |
+|---|---|---|
+| Magic Bullet blender | $25.00 | $3.00 |
+| Desk lamp | $45.00 | $5.00 |
+| Angle grinder | $18.00 | $5.00 |
+
+`category` and `condition` came back identical across both runs — the edit moved the field it
+targeted and left everything else stable.
+
+**Correction:** in the same batch, with the same prompt, Haiku returned `"suggested_price":
+3.00` as a JSON *number* for one photo and `"5.00"` as a *string* for the other two. The
+`Decimal` field coerces both, so it validated either way — a stricter `float` annotation
+would have failed two of three. Lenient typing was doing invisible work; now it's a
+documented reason not to tighten it.
+
+**Correction:** I was told the extraction cache would return stale results on a re-run and
+would need clearing first. Wrong — there is no `CACHES` block in settings, so Django uses
+`LocMemCache`, which lives in process memory and dies with the process. Every script run
+starts cold. That matters for cost: re-running the same photo in a new process is a fresh
+paid call, not a free cache hit. The 24h cache only helps inside one long-lived process such
+as `runserver`.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -880,6 +969,16 @@ asserting `MatchError` instead of the degrade path it claims to cover.
   .env` step I'd just documented would have failed for anyone but me. Nothing else in the
   setup, including the full `requirements.txt` install, was wrong; the one gap was invisible
   from inside a working tree.
+- **Say what a number means.** `suggested_price: a number in USD` produced resale values in
+  a lending marketplace, three times out of three. The model wasn't wrong; the prompt never
+  said what it was pricing. Every ambiguous field in a prompt gets resolved by the model's
+  priors, and its priors are not your product.
+- **An instruction the model ignores is a finding, not a bug to argue with.** Six of six
+  responses arrived fenced despite an explicit instruction not to. The right response was to
+  record that the defensive parser is load-bearing, not to escalate the wording.
+- **The stub proves the plumbing, never the output.** Fencing rate, retry rate, and whether
+  the values mean anything are all invisible until a real model answers. Everything the stub
+  validated stayed valid; everything it couldn't see was wrong.
 - **Ask what a green test would look like if the code were broken.** Two of the four cache
   tests would have passed with the provider never called, because `LocMemCache` survives
   between tests and the first two share a key. A test that passes without executing the code

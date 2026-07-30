@@ -21,6 +21,7 @@ class MatchError(Exception):
 
 EARTH_RADIUS_KM = 6371
 DEFAULT_RADIUS_KM = 25  # used when the user didn't state a distance
+WIDENED_RADIUS_KM = 100  # one retry when the requested radius finds nothing at all
 CANDIDATE_LIMIT = 25  # cap: past this you pay tokens for listings that will never rank
 MEMORY_TTL_MINUTES = 30  # older than this, a new message starts a fresh search
 
@@ -186,11 +187,17 @@ def retrieve_candidates(
     wrong-category-but-nearby listing still surfaces as a candidate to be ranked down.
     The model never does arithmetic filtering.
 
-    Returns (listing, distance_km, trust_report) triples. Trust-checking happens
-    HERE, between retrieval and compaction, so the flags reach the ranking prompt
-    rather than being computed after the model has already chosen.
+    Returns ([(listing, distance_km, trust_report), ...], widened). Trust-checking
+    happens HERE, between retrieval and compaction, so the flags reach the ranking
+    prompt rather than being computed after the model has already chosen.
 
-    Writes two TraceLog rows: geo_search at `step_index`, trust_check at the next.
+    `widened` is True when the requested radius found nothing and the search was
+    retried at WIDENED_RADIUS_KM. The caller surfaces it, for the same reason
+    `degraded` is surfaced: a constraint the user didn't ask for shouldn't be
+    silent.
+
+    Writes a geo_search TraceLog row per attempt at `step_index` (so a widened run
+    leaves two), and trust_check at the next index.
     """
     filters = {"is_available": True}
     if query.max_price is not None:
@@ -198,10 +205,21 @@ def retrieve_candidates(
     radius = query.max_distance_km or DEFAULT_RADIUS_KM
 
     # geo_search writes the TraceLog row — don't trace again here, or every
-    # retrieval leaves two geo_search rows in the same run.
+    # retrieval leaves two geo_search rows per attempt.
     results = geo_search(
         lat, lng, radius, filters, run_id=run_id, step_index=step_index
     )  # already nearest-first
+
+    # Nothing in range at all. One widened pass beats an empty answer: "nothing
+    # within 5km, but here's what's within 100" is useful; "no results" isn't.
+    # Only widens when it would actually help — never narrows an already-wide ask.
+    widened = False
+    if not results and radius < WIDENED_RADIUS_KM:
+        widened = True
+        results = geo_search(
+            lat, lng, WIDENED_RADIUS_KM, filters, run_id=run_id, step_index=step_index
+        )
+
     capped = results[:limit]
 
     # Annotate AFTER capping: no point trust-checking listings already discarded.
@@ -210,7 +228,10 @@ def retrieve_candidates(
         run_id=run_id,
         step_index=step_index + 1,
     )
-    return [(listing, distance, reports[listing.id]) for listing, distance in capped]
+    candidates = [
+        (listing, distance, reports[listing.id]) for listing, distance in capped
+    ]
+    return candidates, widened
 
 
 def _format_flags(report):

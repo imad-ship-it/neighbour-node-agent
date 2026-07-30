@@ -55,7 +55,10 @@ class MatchView(APIView):
         remember_query(request.user, query, run_id)
 
         # retrieve_candidates writes two steps: geo_search at 1, trust_check at 2.
-        candidates = retrieve_candidates(query, lat, lng, run_id=run_id, step_index=1)
+        candidates, widened = retrieve_candidates(
+            query, lat, lng, run_id=run_id, step_index=1
+        )
         result = rank_candidates(query, candidates, run_id=run_id, step_index=3)
         result.refined = prior is not None
+        result.widened = widened
         return Response(result.model_dump(mode="json"), status=status.HTTP_200_OK)

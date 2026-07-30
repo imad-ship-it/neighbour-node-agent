@@ -65,6 +65,10 @@ class MatchResponse(BaseModel):
         default=False,
         description="True if this search built on the user's previous query.",
     )
+    widened: bool = Field(
+        default=False,
+        description="True if nothing was in range and the radius was widened.",
+    )
 
 
 class RankingResult(BaseModel):

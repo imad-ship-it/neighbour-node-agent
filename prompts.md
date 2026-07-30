@@ -1024,6 +1024,45 @@ response: a constraint the user can't see needs saying out loud.
 
 ---
 
+### 51. Two-model comparison: the architecture finally earned its keep
+
+**Prompt:** Route one match query through both providers using the per-call override. Week 7
+graded deliverable, should take about fifteen minutes.
+
+**Result:** It did, because the plumbing was built on Day 4 — `get_provider(role, override)`
+took the override argument specifically so the same input could go to two models without
+touching settings. The comparison script only had to pass `override=` through
+`understand_query` and `rank_candidates`. Three runs per provider, not one, per entry 50.
+
+| | fenced | avg latency | returned the match |
+|---|---|---|---|
+| `deepseek-chat` | 0 / 6 | 5.76s | 2 / 3 |
+| `claude-haiku-4-5` | 6 / 6 | 6.19s | 3 / 3 |
+
+**This settles entry 48's open question: fencing is a model property, not a prompt property.**
+Haiku fenced 12 of 12 calls across two unrelated prompts — extraction and ranking — both of
+which explicitly forbid it. DeepSeek fenced 0 of 9. One model ignores the instruction
+universally, the other complies universally, and no amount of testing against a single
+provider could have distinguished "models do this" from "this model does this".
+
+Haiku was also steadier here: identical 0.72 score on all three runs against DeepSeek's
+0.7 → 0.55 → empty, and it quantified its reasoning ("well under budget at $20, very close
+at 1.4km") where DeepSeek stayed qualitative ("for a weekend project it will work").
+
+**Correction:** that is awkward for the README, which justifies DeepSeek for matching partly
+on quality. DeepSeek is still ~4× cheaper per token so the cost half stands, but the quality
+half is no longer one-sided. Recorded in the README as an open question with the numbers
+attached rather than quietly deleted or overreacted to — three runs of one query is evidence,
+not a mandate to re-architect.
+
+**Correction:** the two models tokenise differently — `['cordless', 'drill']` versus
+`['cordless drill']`. Harmless today only because `retrieve_candidates` filters on price,
+radius and availability and never reads `keywords`. The moment keywords drive filtering it
+becomes a bug that reproduces on one provider and not the other, which is the worst kind to
+diagnose. Noted while it is still theoretical.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-

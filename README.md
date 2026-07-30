@@ -254,6 +254,34 @@ structured `MatchQuery` out, then ranking with Markdown explanations. It is stru
 reasoning over short inputs, which DeepSeek does well at a fraction of frontier pricing.
 It is also *not* a candidate for extraction: `deepseek-chat` has no vision.
 
+### Two-model comparison
+
+The `override` argument on `get_provider(role, override)` exists so the same input can be
+routed to two models without touching settings. One query — *"I need a cordless drill for
+the weekend, nothing over $50"* — through both, 3 runs each:
+
+| | fenced responses | avg latency | returned the match |
+|---|---|---|---|
+| `deepseek-chat` | **0 / 6** | 5.76s | 2 / 3 runs |
+| `claude-haiku-4-5` | **6 / 6** | 6.19s | 3 / 3 runs |
+
+**Fencing is a property of the model, not the prompt.** Haiku wrapped its JSON in ```` ```json ````
+on 12 of 12 calls across two unrelated prompts, both of which explicitly say not to; DeepSeek
+did it on 0 of 9. So `strip_code_fences` is load-bearing for one provider and dead code for
+the other — a fact that is invisible with only one live model, and the clearest argument for
+keeping the provider layer role-based.
+
+Haiku was also steadier on this query (identical 0.72 score every run, versus DeepSeek
+drifting 0.7 → 0.55 → no match) and quantified its reasoning where DeepSeek stayed
+qualitative. DeepSeek remains roughly 4× cheaper per token, so the cost argument above holds
+— but the quality argument is not one-sided, and three runs of one query is not enough to
+redesign around. Recorded as an open question rather than settled.
+
+They also disagree on tokenisation: DeepSeek returns `keywords: ['cordless', 'drill']`,
+Haiku returns `['cordless drill']`. Harmless today because `retrieve_candidates` filters on
+price, radius and availability and never reads `keywords` — but it would become a
+provider-specific bug the moment keywords drive filtering.
+
 **Why the stub is the default.** Extraction failure modes (bad JSON, invalid enum, wrong
 shape) are caught by `generate_and_validate`, not by the model, so the whole pipeline —
 prompt building, parsing, validation, the capped retry, tracing — is exercised and testable

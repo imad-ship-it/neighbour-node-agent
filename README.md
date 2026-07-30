@@ -34,6 +34,12 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
   consistency: price outside its category's band, a title that disagrees with its
   category, a description too thin to be useful, a missing photo. Each flag carries
   a stable code, a severity and the evidence that fired it.
+- **Match UI** — a search box that takes plain English ("something to help me move
+  furniture on saturday"), and result cards showing the ranked listing, its distance,
+  the agent's Markdown explanation, and its **concerns** — the trust flags rewritten by
+  the model into plain language ("no photo available – you can't see the item"). An empty
+  result is presented as an answer, not an error, because a real neighbourhood often has
+  nothing that fits.
 - **MCP server** — `geo_search` and `trust_check` exposed as MCP tools plus a
   `listing://{id}` resource, so any MCP client drives the same code the agent calls
   in-process.
@@ -124,9 +130,9 @@ neighbour-node-agent/
 │   └── src/
 │       ├── api/                # axios client + in-memory token store
 │       ├── context/            # AuthContext
-│       ├── hooks/              # data-fetching hooks (TanStack Query)
-│       ├── pages/              # Login, Signup, Listings, CreateListingForm
-│       └── components/         # Button, Icon, ListingCard
+│       ├── hooks/              # TanStack Query hooks (useListings, useMatch)
+│       ├── pages/              # Login, Signup, Listings, CreateListingForm, Match
+│       └── components/         # Button, Icon, ListingCard, MatchCard, MatchExplanation
 └── prompts.md                  # AI-interaction log
 ```
 
@@ -195,15 +201,18 @@ Run both servers at once (two terminals). The React app calls the API at
 
 With the defaults, the app runs entirely on the stub provider — no keys, no cost.
 
-> **Live providers are not wired yet.** Both roles work end-to-end on `stub`. Setting a
-> role to `anthropic` or `deepseek` currently raises `NotImplementedError` (the provider
-> `generate()` bodies are skeletons), and needs the client library installed — those are
-> deliberately not in `requirements.txt` so a stub-only clone stays dependency-free:
+> **Both live providers work.** Switching a role off `stub` needs an API key and the
+> client library, which are deliberately **not** in `requirements.txt` so a stub-only
+> clone stays dependency-free and costs nothing:
 >
 > ```bash
 > pip install anthropic   # for EXTRACTION_PROVIDER=anthropic
 > pip install openai      # for MATCHING_PROVIDER=deepseek (OpenAI-compatible API)
 > ```
+>
+> Costs are small but not zero: roughly **$0.0023** per photo extraction and a fraction
+> of a cent per match. Note the result cache is per-process (see below), so a fresh
+> script run re-pays for the same photo.
 
 ---
 
@@ -390,11 +399,14 @@ Column names and types are verified after each migration with a SQLite browser
 
 ---
 
-## Roadmap
+## Known limitations & next steps
 
-- Live Claude API call for extraction (provider body currently a skeleton).
-- Live DeepSeek call for matching (provider body currently a skeleton) — the agent
-  graph itself is complete and runs on the stub.
-- Frontend for `/api/match/`: the match agent is API-only today.
-- Messaging, notifications, and bookmark frontend.
-- Test suite to 70%+ coverage, Docker, UX pass, final docs.
+- Messaging, notifications and bookmarks are models + migrations only — no API, no UI.
+- Test coverage is service-level (16 tests): extraction, caching, and the match agent.
+  Views, serializers, permissions, the trust rules and the MCP tools are untested, and
+  coverage isn't measured.
+- Real geolocation. The match UI searches from a fixed point matching the seeded data,
+  because browser geolocation would put a user nowhere near it.
+- Persistent result cache. `LocMemCache` dies with the process, so the 24h extraction
+  cache only helps inside a running server.
+- Postgres, Docker, deployment.

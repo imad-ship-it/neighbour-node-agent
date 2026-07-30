@@ -347,3 +347,184 @@
 .form-alt a {
   color: var(--accent);
 }
+
+/* ---------- match agent ---------- */
+
+.match-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.match-form input {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-h);
+  font: inherit;
+}
+.match-form input:focus {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.match-examples {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+}
+.match-examples button {
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.match-examples button:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* Notices carry constraints the user never asked for — a widened radius, a
+   degraded ranking, an inherited previous query. Visible, not alarming. */
+.match-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.notice {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--text-h);
+}
+.notice-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.match-count {
+  font-size: 14px;
+  margin: 0 0 14px;
+}
+.state-sub {
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.match-card {
+  display: grid;
+  grid-template-columns: 32px 150px 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+}
+.match-rank {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.match-media {
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.match-body h3 {
+  margin: 0 0 8px;
+  color: var(--text-h);
+}
+.match-body .listing-meta {
+  margin-bottom: 8px;
+}
+.match-body .listing-price {
+  margin: 0 0 10px;
+}
+
+.match-explanation {
+  font-size: 15px;
+}
+.match-explanation-p {
+  margin: 0 0 8px;
+}
+.match-explanation-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.match-explanation-code {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.chip {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.chips-good .chip {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+/* Concerns are the trust flags reaching a person. They should read as a caution
+   worth pausing on, not as an error the app has made. */
+.chips-warn .chip {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+@media (max-width: 640px) {
+  .match-card {
+    grid-template-columns: 32px 1fr;
+  }
+  .match-media {
+    display: none;
+  }
+}

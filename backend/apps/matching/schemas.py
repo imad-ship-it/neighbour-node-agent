@@ -49,10 +49,34 @@ class RankedMatch(BaseModel):
     )
 
 
+class ListingSummary(BaseModel):
+    """Enough of a Listing to render a result card, resolved server-side.
+
+    RankedMatch deliberately carries only `listing_id` — the model should not be
+    echoing back data we already hold, and anything it echoed would need
+    verifying. But a client cannot reconstruct this by joining against
+    /api/listings/ either: `distance_km` is computed per search by haversine and
+    is not a field on Listing. So the service resolves it from the candidates it
+    already has in hand.
+    """
+
+    id: int
+    title: str
+    category: str
+    condition: str
+    price: Decimal
+    distance_km: float
+    image: str = Field(default="", description="Stored path, or '' when absent.")
+
+
 class MatchResponse(BaseModel):
     """The full agent result for one run."""
 
     matches: list[RankedMatch]
+    listings: list[ListingSummary] = Field(
+        default_factory=list,
+        description="Detail for the matched listings, in the same order.",
+    )
     candidate_count: int = Field(
         ge=0, description="Listings considered before ranking."
     )

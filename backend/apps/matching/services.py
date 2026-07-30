@@ -11,7 +11,13 @@ from apps.listings.models import Listing
 from django.utils import timezone
 
 from .models import MatchSession
-from .schemas import MatchQuery, MatchResponse, RankedMatch, RankingResult
+from .schemas import (
+    ListingSummary,
+    MatchQuery,
+    MatchResponse,
+    RankedMatch,
+    RankingResult,
+)
 from .trust import check_listings
 
 
@@ -287,6 +293,33 @@ def _build_rank_prompt(query, candidates, error_context=None):
     return prompt
 
 
+def _summarise(matches, candidates):
+    """Resolve the matched ids back to renderable listing detail.
+
+    Only the listings actually returned, not every candidate — the client has no
+    use for the ones that didn't rank, and each one costs payload.
+    """
+    by_id = {listing.id: (listing, distance) for listing, distance, _ in candidates}
+    summaries = []
+    for match in matches:
+        pair = by_id.get(match.listing_id)
+        if pair is None:  # already filtered by valid_ids, but don't assume
+            continue
+        listing, distance = pair
+        summaries.append(
+            ListingSummary(
+                id=listing.id,
+                title=listing.title,
+                category=listing.category,
+                condition=listing.condition,
+                price=listing.price,
+                distance_km=round(distance, 1),
+                image=listing.image.name or "",
+            )
+        )
+    return summaries
+
+
 def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None):
     """LLM call #2: score and explain the retrieved candidates.
 
@@ -326,20 +359,22 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
     except Exception:
         # Deliberately broad: a bad ranking should never break search.
         # Candidates are already nearest-first, so fall back to that order.
+        degraded_matches = [
+            RankedMatch(
+                listing_id=listing.id,
+                score=0.0,
+                rank=i,
+                explanation=f"{distance:.1f} km away.",
+                # The ranker is gone, but the trust flags are deterministic and
+                # still worth showing — a degraded result shouldn't also be a
+                # silent one.
+                concerns=[flag.code for flag in report.flags],
+            )
+            for i, (listing, distance, report) in enumerate(candidates, start=1)
+        ]
         return MatchResponse(
-            matches=[
-                RankedMatch(
-                    listing_id=listing.id,
-                    score=0.0,
-                    rank=i,
-                    explanation=f"{distance:.1f} km away.",
-                    # The ranker is gone, but the trust flags are deterministic and
-                    # still worth showing — a degraded result shouldn't also be a
-                    # silent one.
-                    concerns=[flag.code for flag in report.flags],
-                )
-                for i, (listing, distance, report) in enumerate(candidates, start=1)
-            ],
+            matches=degraded_matches,
+            listings=_summarise(degraded_matches, candidates),
             candidate_count=len(candidates),
             run_id=run_id,
             degraded=True,
@@ -348,7 +383,10 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
     # The model can invent an id — drop anything that wasn't actually retrieved.
     matches = [m for m in result.matches if m.listing_id in valid_ids]
     return MatchResponse(
-        matches=matches, candidate_count=len(candidates), run_id=run_id
+        matches=matches,
+        listings=_summarise(matches, candidates),
+        candidate_count=len(candidates),
+        run_id=run_id,
     )
 
 

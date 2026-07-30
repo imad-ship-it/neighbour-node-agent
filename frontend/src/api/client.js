@@ -17,6 +17,16 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+// ListingSerializer returns absolute image URLs (it has the request), but the
+// match agent's ListingSummary is built in the service layer, which deliberately
+// has no request dependency — so it returns the stored path instead. Derive the
+// media origin from the API base rather than hardcoding the host a second time.
+export function mediaUrl(path) {
+  if (!path) return ''
+  if (path.startsWith('http')) return path
+  return `${client.defaults.baseURL.replace(/\/api\/?$/, '')}/media/${path}`
+}
+
 // Pull the first human-readable message out of a DRF error response.
 export function apiError(error, fallback) {
   const data = error?.response?.data

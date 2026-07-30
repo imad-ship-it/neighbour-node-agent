@@ -120,6 +120,46 @@ class MatchAgentTests(TestCase):
 
         self.assertEqual([m.listing_id for m in result.matches], [listing.id])
 
+    def test_matches_carry_renderable_listing_detail(self):
+        listing = self._listing("Cordless Drill", 40.01, -75.01)
+        run_id = uuid4().hex
+
+        with scripted_provider(
+            "apps.matching.services", QUERY_JSON, rank_json(listing.id)
+        ):
+            query = understand_query("cordless drill", run_id=run_id)
+            candidates, _ = retrieve_candidates(query, LAT, LNG, run_id=run_id)
+            result = rank_candidates(query, candidates, run_id=run_id, step_index=3)
+
+        self.assertEqual(len(result.listings), 1)
+        summary = result.listings[0]
+        self.assertEqual(summary.id, listing.id)
+        self.assertEqual(summary.title, "Cordless Drill")
+        # distance_km is the reason this is resolved server-side at all: it is
+        # computed per search and is not a field on Listing, so no client-side
+        # join against /api/listings/ could ever produce it.
+        self.assertGreater(summary.distance_km, 0)
+        self.assertLess(summary.distance_km, 5)
+
+    def test_degraded_response_still_carries_listing_detail(self):
+        near = self._listing("Cordless Drill", 40.01, -75.01)
+        run_id = uuid4().hex
+
+        with scripted_provider("apps.matching.services", QUERY_JSON):
+            query = understand_query("cordless drill", run_id=run_id)
+        candidates, _ = retrieve_candidates(query, LAT, LNG, run_id=run_id)
+
+        with scripted_provider(
+            "apps.matching.services", raises=RuntimeError("provider down")
+        ):
+            result = rank_candidates(query, candidates, run_id=run_id, step_index=3)
+
+        # The fallback path builds its own matches list — easy to add the field on
+        # the happy path and forget it here, leaving a blank UI exactly when the
+        # ranker is already broken.
+        self.assertTrue(result.degraded)
+        self.assertEqual([s.id for s in result.listings], [near.id])
+
     def test_ranking_failure_degrades_to_distance_order(self):
         near = self._listing("Cordless Drill", 40.01, -75.01)
         far = self._listing("Spare Drill", 40.05, -75.05)

@@ -14,6 +14,7 @@ function Layout({ children }) {
           <NavLink to="/" end>
             Browse
           </NavLink>
+          <NavLink to="/match">Find</NavLink>
           <NavLink to="/create">New listing</NavLink>
           {user ? (
             <>

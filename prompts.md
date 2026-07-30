@@ -741,6 +741,98 @@ Checking the installed package beat carrying an assumption forward from a differ
 
 ---
 
+### 42. One provider fixture, patched where the name is used
+
+**Prompt:** Block 2 — service tests. Build one reusable stub-provider fixture first, then
+test extraction and matching against it.
+
+**Result:** `apps/core/testing.py` (deliberately not a `tests.py`, so both apps can import
+it without depending on another app's test module). `ScriptedProvider` returns queued
+responses in order and records `calls`, `prompts` and `images`; `scripted_provider()` is a
+context manager that patches `get_provider` and yields the instance. Recording prompts is
+what makes the retry testable — otherwise you can prove a second call happened but not that
+it was told anything.
+
+**Correction:** patching `apps.core.services.llm.get_provider` does nothing. Both services
+do `from apps.core.services.llm import get_provider`, which binds the function into their
+own module namespace at import time, so the patch has to target
+`apps.listings.services.get_provider` and `apps.matching.services.get_provider`. Patch where
+a name is used, not where it is defined.
+
+**Correction:** running out of scripted responses raises `ScriptedProviderExhausted`, a
+subclass of `AssertionError` rather than a plain exception. An over-call is a wrong test (or
+a regressed retry cap), and it should read as a failed assertion, not a provider outage.
+
+---
+
+### 43. The brief asked for a test of a feature that didn't exist
+
+**Prompt:** Test the matching agent: three steps under one run_id, radius widening on zero
+candidates, hallucinated id rejected, degraded fallback.
+
+**Result:** Checked each against the code before writing any of it. There was no radius
+widening — `retrieve_candidates` did `radius = query.max_distance_km or DEFAULT_RADIUS_KM`
+and stopped there. Implemented it: one widened pass at 100km when the requested radius
+returns nothing, only when that would actually help, so a 200km request is never narrowed.
+Added `widened` to `MatchResponse` for the same reason `degraded` is there — a constraint
+the user didn't ask for shouldn't be invisible. Also noted the brief said "three steps"; it
+has been four since trust-check landed at step 2.
+
+**Correction:** widening changed `retrieve_candidates` to return `(candidates, widened)`,
+which the view had to unpack — the third signature change through that function in two days.
+Followed the existing `result.refined = ...` pattern rather than inventing a new one.
+
+**Correction:** the first verification was weak. Searching from the middle of the Atlantic
+set `widened=True` but still found nothing, which proves the flag flips, not that widening
+does anything. Re-ran it from 55km north of the seeded cluster: `15.0 -> 0 within radius`,
+then `100 -> 4 within radius`. Test the case where the fallback actually rescues something.
+
+---
+
+### 44. Cache tests that would have passed for the wrong reason
+
+**Prompt:** Test the cache carefully — a broken cache costs real money once live keys land.
+
+**Result:** Four tests, each mapped to a way the cache costs money: same image hits (or you
+pay every time), different description misses (or a lender gets someone else's listing),
+different image misses (key collision), and the cached value round-trips. Pinned to a
+dedicated `LocMemCache` LOCATION via `override_settings` so a stale entry from `runserver`
+can't leak in.
+
+**Correction:** `TestCase` does not clear the cache between tests, and `LocMemCache` is
+per-process. The first two extraction tests use the same 10x10 PNG and the same empty
+description, so they hash to the *same key* — without `cache.clear()` in `setUp`, the second
+test would have been served the first one's cached result and passed with the provider never
+called at all. A green test that never ran the code under test.
+
+**Correction:** verified the round-trip test wasn't vacuous by inspecting what actually sits
+in the cache. `model_dump(mode="json")` stores `suggested_price` as the **string** `'35.00'`;
+it comes back as `Decimal('35.00')` only because pydantic re-coerces it on the way out. Write
+and read are separate code paths and nothing had ever proved they agreed.
+
+---
+
+### 45. Duplicated test methods pass silently
+
+**Prompt:** Add the remaining three matching tests.
+
+**Result:** Degraded fallback, radius widening, and a test asserting trust flags reach the
+ranking prompt. That last one is the guard on the annotator seam: move the trust check to
+after ranking and every other test still passes, but that one fails. Confirmed it
+discriminates — `thin_description` appears in the prompt only when a flag actually renders,
+never in the instruction text.
+
+**Correction:** the three tests ended up in the file twice. Python silently lets a later
+`def` replace an earlier one, so the suite reported 14 tests, everything passed, and nothing
+looked wrong — the duplicates had quietly shadowed the originals. Only ruff's `F811` caught
+it. If the two copies had drifted, I'd have been running the version I wasn't reading.
+
+**Correction:** the degraded test needs *two* `scripted_provider` blocks. `raises=` makes
+every call fail, so a single block breaks `understand_query` too and the test ends up
+asserting `MatchError` instead of the degrade path it claims to cover.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -788,6 +880,16 @@ Checking the installed package beat carrying an assumption forward from a differ
   .env` step I'd just documented would have failed for anyone but me. Nothing else in the
   setup, including the full `requirements.txt` install, was wrong; the one gap was invisible
   from inside a working tree.
+- **Ask what a green test would look like if the code were broken.** Two of the four cache
+  tests would have passed with the provider never called, because `LocMemCache` survives
+  between tests and the first two share a key. A test that passes without executing the code
+  under test is worse than no test — it reports coverage it doesn't have.
+- **Check the brief against the code before writing to it.** "Test the radius widening" and
+  "the three seeded awkward cases are your fixtures" both described a codebase that didn't
+  exist yet. Reading the source first turned two hours of confused test-writing into fifteen
+  minutes of implementation.
+- **Patch where a name is used, not where it's defined.** `from x import y` binds `y` into
+  the importing module at import time; patching `x.y` afterwards has no effect on it.
 - **Build the fixtures before the rules that read them.** Every trust rule looked fine in
   isolation; two were worthless against the actual data — one fired on 100% of rows, one on
   80% as pure seed artifact. Neither is visible from reading the rule. Check what a new

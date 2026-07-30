@@ -922,6 +922,108 @@ as `runserver`.
 
 ---
 
+### 48. DeepSeek live, and a finding that only exists once two providers are real
+
+**Prompt:** Take matching live. DeepSeek is OpenAI-compatible, so it should be a base-URL
+swap in a new provider class. Run three real queries including one awkward case.
+
+**Result:** `DeepSeekLLMProvider.generate()` filled in against the `openai` client with
+`base_url="https://api.deepseek.com"` — the entire integration really is a base-URL swap, no
+second SDK. `MAX_TOKENS = 1500` rather than extraction's 512, because a ranking response
+carries several matches each with a Markdown explanation, matched factors and concerns.
+Three queries: one naming the item directly, one naming the *job* instead of the tool ("cut
+through some metal pipes"), and one deliberately vague ("hosting a barbecue... sort out the
+cooking").
+
+The finding that made this worth doing came from having both providers live at once:
+
+| Model | Responses arriving fenced |
+|---|---|
+| Claude Haiku 4.5 | **6 / 6** |
+| DeepSeek chat | **0 / 3** |
+
+Same instruction, same codebase, opposite behaviour. Entry 46 recorded "the model ignores
+the no-fences instruction" — that turns out to be a *Haiku* property, not a general truth.
+`strip_code_fences` is load-bearing for one provider and dead code for the other, and there
+was no way to know which from a single live model.
+
+Also validated live: the annotator seam from entry 40. A real model read the trust flags out
+of the compacted prompt and weighed them — *"the poor condition and `thin_description` flag
+lower the score"*, with the flag repeated in `concerns`. Until now only the stub had ever
+done that.
+
+**Hallucinated listing ids: 0 of 3 returned.** The `valid_ids` guard never fired. Recording
+it as measured rather than assumed, with the caveat that three queries returning three ids is
+too small a sample to claim the failure mode doesn't occur — only that it didn't here.
+
+**Correction:** the provider raises on `image_base64` instead of ignoring it. `deepseek-chat`
+has no vision, and silently dropping the image would produce a confident description of
+nothing — the worst possible failure shape.
+
+---
+
+### 49. The ranker invented fit rather than returning nothing
+
+**Prompt:** Read the Markdown explanations critically. Generic praise means the prompt needs
+tightening to demand the concrete deciding factor.
+
+**Result:** The failure was worse than generic praise. Asked for something to *"cut through
+some metal pipes"* — with nothing in the candidate set that cuts metal — DeepSeek returned
+two matches: a drill ranked first (*"likely usable for cutting"*) and an **extension cord**
+ranked second at score **0.5**, explained as *"not ideal for cutting metal but is a tool-like
+item, cheap and nearby."*
+
+The explanations weren't vague. They were specific, fluent, and wrong, which is far more
+dangerous in a demo — vague praise reads as weak, a confident false rationale reads as
+competent until somebody checks. The score scale was unused too: 0.5 for an item with zero fit.
+
+The prompt already said *"Leave out listings that clearly don't fit rather than padding the
+list."* It padded anyway. Three replacements:
+
+- *Returning an empty matches array is the **CORRECT** answer when nothing genuinely does the
+  job* — permitted was not enough, it had to be named as right.
+- *Never claim an item can do something the listing doesn't support. If it cannot do the job,
+  exclude it; do not include it with a caveat.*
+- *Each explanation must name the concrete reason THIS listing fits THIS request.*
+
+**The extension cord appeared in 1 of 1 runs before, and 0 of 4 runs after.**
+
+**Correction:** the behaviour was inconsistent before the fix, which is what made it easy to
+miss. The same prompt padded on the metal-pipes query and correctly returned nothing on the
+barbecue query. An instruction being followed *sometimes* looks like a working instruction.
+
+---
+
+### 50. I called a regression off a single run, and was wrong
+
+**Prompt:** (self-inflicted) After tightening the rank prompt, one query that previously
+returned a match came back empty. Reported it as a regression caused by the fix.
+
+**Result:** It wasn't. Four post-fix runs of the identical three queries:
+
+| Query | Post-fix results across 4 runs |
+|---|---|
+| "cordless drill under $50" | `[]`, `[375]`, `[375]`, `[375]` |
+| "cut through metal pipes" | `[375]`, `[375]`, `[375]`, `[]` |
+| barbecue | `[]`, `[]`, `[]`, `[]` |
+
+The empty result showed up in roughly **one run in four**, on *both* queries, in no
+particular pattern. It was run-to-run variance, not the prompt. The real signal was the one
+that held across all four runs: the extension cord never came back.
+
+**Correction:** the tell was already in the data and I read past it. The vague query's
+`category_guess` flipped between `other` and `appliances` between runs — and I had not
+touched the query-understanding prompt at all. Output changing on a prompt I didn't edit is
+proof that a single before/after comparison cannot attribute anything.
+
+**Correction:** this also changes a product requirement, not just a methodology one. A
+neighbour can run the same search twice and get a result, then nothing. The empty state has
+to read as "nothing nearby fits" rather than looking like a failed request — the UI cannot
+treat an empty `matches` array as an error. Same reason `degraded` and `widened` are on the
+response: a constraint the user can't see needs saying out loud.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -969,6 +1071,18 @@ as `runserver`.
   .env` step I'd just documented would have failed for anyone but me. Nothing else in the
   setup, including the full `requirements.txt` install, was wrong; the one gap was invisible
   from inside a working tree.
+- **n=1 is not evidence with a non-deterministic system.** Identical input flipped between a
+  match and an empty result about a quarter of the time. Any prompt change judged on one
+  before/after run is judged on noise. Runs are cheap; conclusions drawn from one aren't.
+- **"Permitted" is not "correct".** The rank prompt said to leave out listings that don't fit,
+  and the model padded anyway. It stopped once returning nothing was named as the *right*
+  answer rather than an allowed one. Models optimise toward what you frame as success.
+- **Fluent and wrong is more dangerous than vague and wrong.** An extension cord ranked for
+  cutting metal pipes, with a plausible-sounding rationale, reads as competent right up until
+  someone checks. Weak output announces itself; confident fabrication doesn't.
+- **One live provider can't tell you which behaviours are general.** "The model ignores the
+  no-fences instruction" was true of Haiku and false of DeepSeek. Everything learned from a
+  single model is a hypothesis about that model.
 - **Say what a number means.** `suggested_price: a number in USD` produced resale values in
   a lending marketplace, three times out of three. The model wasn't wrong; the prompt never
   said what it was pricing. Every ambiguous field in a prompt gets resolved by the model's

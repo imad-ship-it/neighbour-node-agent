@@ -259,8 +259,20 @@ def _build_rank_prompt(query, candidates, error_context=None):
         "of the ids below), score (0-1), rank (int from 1), explanation "
         "(short Markdown for the user), matched_factors (array of short "
         "strings), concerns (array of short strings)\n"
-        "Weigh category fit, condition, price and distance. Leave out "
-        "listings that clearly don't fit rather than padding the list.\n"
+        "Weigh category fit, condition, price and distance.\n"
+        # Live DeepSeek ranked an extension cord 2nd for "cut through metal pipes"
+        # at score 0.5, explaining it was "not ideal for cutting metal but is a
+        # tool-like item". "Leave out listings that don't fit" was not enough —
+        # returning nothing has to be stated as the CORRECT answer, not as a
+        # permitted one, and inventing capability has to be named as a failure.
+        "Returning an empty matches array is the CORRECT answer when nothing in "
+        "the list genuinely does the job the neighbour described. Never include a "
+        "listing just to avoid returning nothing — a wrong suggestion wastes a "
+        "trip and costs more than an honest empty result.\n"
+        "Never claim an item can do something the listing doesn't support. If it "
+        "cannot do the job, exclude it; do not include it with a caveat.\n"
+        "Each explanation must name the concrete reason THIS listing fits THIS "
+        "request — the deciding factor, not generic praise.\n"
         "Some candidates carry trust flags from an automated consistency check. "
         "Treat a high-severity flag as a reason to downrank or drop the listing, "
         "and repeat the reason in concerns so the user can see it.\n"

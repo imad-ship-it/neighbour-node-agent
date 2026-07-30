@@ -50,8 +50,9 @@ def search_listings_by_distance(lat, lng, radius_km, filters=None):
     `filters` is an optional dict of ORM lookups, e.g.
     {"is_available": True, "category": "tools"}.
 
-    A plain callable with no view/request dependency — the DRF geo-search view
-    and the Day-5 MCP server both call this; neither reimplements it.
+    A plain callable with no view/request dependency and no tracing. Wrapped by
+    geo_search() below, which is what the match agent and the MCP server both
+    call — neither reimplements the distance maths.
     """
 
     queryset = Listing.objects.all()

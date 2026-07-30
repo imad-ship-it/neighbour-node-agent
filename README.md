@@ -26,6 +26,17 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 - **Bookmarks** — one-tap toggle endpoint per listing.
 - **Geo-search** — Haversine great-circle distance to find listings within a radius,
   nearest-first, as a reusable standalone function.
+- **Match agent** — a four-step graph at `/api/match/`: understand the free-text
+  request → retrieve candidates by hard filters → trust-check them → rank with
+  Markdown explanations. Per-user session memory (30 min TTL) turns a follow-up
+  message into a refinement of the previous search.
+- **Trust checks** — deterministic, rule-based flags on a listing's internal
+  consistency: price outside its category's band, a title that disagrees with its
+  category, a description too thin to be useful, a missing photo. Each flag carries
+  a stable code, a severity and the evidence that fired it.
+- **MCP server** — `geo_search` and `trust_check` exposed as MCP tools plus a
+  `listing://{id}` resource, so any MCP client drives the same code the agent calls
+  in-process.
 - **JWT authentication** — register / login / refresh / "me".
 - **Tracing** — every LLM call is recorded (run id, step, tool, timing, status) for
   observability and demos.
@@ -41,24 +52,36 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 
 ```mermaid
 flowchart TD
-    UI["React 19 + Vite<br/>Listings · CreateListingForm"] -->|"axios + JWT"| API["Django REST Framework<br/>/api/auth/ · /api/listings/"]
+    UI["React 19 + Vite<br/>Listings · CreateListingForm"] -->|"axios + JWT"| API["Django REST Framework<br/>/api/auth/ · /api/listings/ · /api/match/"]
+    MCPC["MCP client<br/>Claude Code · Cursor"] -->|"stdio JSON-RPC"| MCPS["mcp_server.py<br/>geo_search · trust_check · listing://"]
     API --> EXT["listings/services.py<br/>extract_listing_from_image()"]
-    API --> MATCH["matching/services.py<br/>understand_query() → retrieve_candidates()"]
+    API --> MATCH["matching/services.py<br/>understand → retrieve → trust → rank"]
     EXT --> REG["core/services/llm<br/>get_provider(role, override)"]
     MATCH --> REG
     REG -->|"EXTRACTION_PROVIDER"| CLAUDE["Anthropic Claude<br/>vision extraction"]
     REG -->|"MATCHING_PROVIDER"| DS["DeepSeek<br/>structured matching"]
     REG -->|"default"| STUB["StubLLMProvider<br/>no API key"]
     MATCH -.->|"tool call"| GEO["geo_search<br/>haversine + radius"]
+    MATCH -.->|"tool call"| TRUST["trust_check<br/>deterministic rules"]
+    MCPS -.-> GEO
+    MCPS -.-> TRUST
     GEO --> DB[("SQLite")]
+    TRUST --> DB
     EXT --> TRACE["TraceLog"]
     MATCH --> TRACE
+    MCPS --> TRACE
 ```
 
 The two AI paths — photo extraction and query matching — both go through one provider
-registry, which resolves each **role** to a model independently. `geo_search` hangs off
-the matching path as a **tool**: a plain callable the agent invokes for hard distance
-filtering, so the model never does arithmetic itself.
+registry, which resolves each **role** to a model independently. `geo_search` and
+`trust_check` hang off the matching path as **tools**: plain callables the agent invokes
+for hard distance filtering and rule-based checks, so the model never does arithmetic or
+consistency-checking itself.
+
+Those two tools are also the MCP server's entire surface. The server is a thin adapter —
+**one implementation, two callers**. Whether a call arrives from the match agent
+in-process or from an MCP client over stdio, it runs the same function and writes the
+same `TraceLog` row, distinguished only by `agent_name`.
 
 ---
 
@@ -83,17 +106,19 @@ filtering, so the model never does arithmetic itself.
 
 ```
 neighbour-node-agent/
+├── .mcp.json                   # MCP client config — points a client at the server
 ├── backend/
 │   ├── config/                 # Django project (settings, urls, asgi/wsgi)
 │   ├── apps/
 │   │   ├── users/              # custom User model + JWT auth endpoints
 │   │   ├── listings/           # Listing model, API, extraction service + schema
 │   │   ├── bookmarks/          # Bookmark model
-│   │   ├── matching/           # Haversine + geo-search (match agent to come)
+│   │   ├── matching/           # match agent, geo-search, trust rules, session memory
 │   │   ├── messaging/          # Conversation / Message models
 │   │   ├── notifications/      # Notification model
 │   │   └── core/               # LLM provider layer, tracing, validation, seed_data
 │   ├── manage.py
+│   ├── mcp_server.py           # MCP server (stdio) — run directly, not via manage.py
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
@@ -235,6 +260,7 @@ shape of the code around it.
 | `GET`/`PUT`/`PATCH`/`DELETE` | `/api/listings/{id}/` | public read / JWT write | Retrieve / update / delete |
 | `POST` | `/api/listings/{id}/bookmark/` | JWT | Toggle bookmark |
 | `POST` | `/api/listings/extract/` | JWT | Photo → draft listing (multipart `image`, optional `description`) |
+| `POST` | `/api/match/` | JWT | Free text + `lat`/`lng` → ranked matches with explanations. Pass `fresh: true` to ignore session memory |
 
 Authenticated requests use `Authorization: Bearer <access-token>`.
 
@@ -251,6 +277,49 @@ Authenticated requests use `Authorization: Bearer <access-token>`.
    invalid value. On a validation failure it retries once with the error fed back.
 5. Every call is written to `TraceLog`. The validated **draft** is returned unsaved.
 6. The lender reviews/edits and POSTs it to `/api/listings/` to create the real listing.
+
+---
+
+## MCP server
+
+`backend/mcp_server.py` exposes the agent's two tools over the Model Context Protocol
+(stdio transport), so an external client can drive them directly.
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Tool | `geo_search` | Items available to borrow near a point, nearest first. Optional `category` / `max_price` / `limit` |
+| Tool | `trust_check` | Rule-based consistency flags for one listing, with severity and evidence |
+| Resource | `listing://{id}` | Full detail for one listing |
+
+**It is the same code the agent runs.** `geo_search` calls `matching.services.geo_search`
+and `trust_check` calls `matching.trust.check_listing_by_id` — the tools reimplement
+nothing. Every call writes a `TraceLog` row with `agent_name="mcp"`, so a filter on that
+column shows exactly what arrived over the protocol, and a match run shows its own
+`trust_check` step inline with the LLM calls.
+
+Connect a client with the committed [`.mcp.json`](.mcp.json) — start it from the repo
+root so the config is picked up:
+
+```bash
+cd neighbour-node-agent
+claude          # then /mcp should show neighbour-node · connected
+```
+
+The paths in `.mcp.json` are absolute and Windows-specific; change them to match your
+checkout. To run the server by hand (it will sit silently, waiting on stdin):
+
+```bash
+cd backend
+python mcp_server.py
+```
+
+Two things that bite when working on it:
+
+- **stdout is the transport.** A single `print()` corrupts the JSON-RPC stream and the
+  client drops the server with no visible error. Diagnostics go to stderr.
+- **Django must be configured before any model import** — `mcp_server.py` sets
+  `DJANGO_SETTINGS_MODULE` and calls `django.setup()` before importing from `apps.*`,
+  which is why those imports carry `# noqa: E402`.
 
 ---
 
@@ -281,8 +350,8 @@ Column names and types are verified after each migration with a SQLite browser
 ## Roadmap
 
 - Live Claude API call for extraction (provider body currently a skeleton).
-- DeepSeek matching & ranking agent (multi-step retrieval + Markdown explanations).
-- `CreateListingForm` to close the lender flow end-to-end.
-- MCP server exposing geo-search and trust-check tools with session memory.
+- Live DeepSeek call for matching (provider body currently a skeleton) — the agent
+  graph itself is complete and runs on the stub.
+- Frontend for `/api/match/`: the match agent is API-only today.
 - Messaging, notifications, and bookmark frontend.
 - Test suite to 70%+ coverage, Docker, UX pass, final docs.

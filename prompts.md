@@ -634,6 +634,113 @@ Stale memory is worse than no memory.
 
 ---
 
+### 37. Seed fixtures had to be built before the rules that read them
+
+**Prompt:** Day 5's overdue MCP block needs a `trust_check` tool, and the brief says the
+three seeded awkward cases are its test fixtures.
+
+**Result:** Checked the fixtures against the planned rules before writing any of them. The
+three awkward cases break *ranking* dimensions (far away, poor condition, wrong category for
+the search), not *internal consistency*, which is what a trust rule can see from one row. Added
+four trust fixtures — one broken rule each, everything else deliberately normal — so a flag
+identifies its own rule with no ambiguity.
+
+**Correction:** two rules were unusable as seeded. `no_photo` would have fired on **all 43**
+rows, because `bulk_create` never set `image` — a flag that fires on everything carries no
+information. And the random rows drew `title` and `category` independently, so ~80% of them had
+a title noun disagreeing with their category; `title_category_mismatch` would have returned ~30
+rows of pure seed artifact and buried the one real fixture. Fixed by giving 90% of rows a photo
+and deriving category (and price band) from the item noun. Result: 10 of 47 flagged, every one
+deliberate.
+
+---
+
+### 38. Keyword rules need an escape for legitimately ambiguous titles
+
+**Prompt:** Write the four trust rules.
+
+**Result:** `price_out_of_range` (per-category band, `high` past 5×), `title_category_mismatch`,
+`thin_description`, `no_photo`. Flags carry a stable `code`, a `severity` and the `evidence`
+that fired them — structured, so a client can branch on the code and a model can weigh the
+severity, rather than parsing a sentence.
+
+**Correction:** the first title rule flagged "Folding Camping Table" (filed under
+sporting_goods) because *table* is a furniture keyword — breaking a fixture that was supposed to
+test only `no_photo`. Fixed by collecting **all** categories a title hints at and staying silent
+when the row's own category is among them. A title can carry more than one signal, and a rule
+that takes the first match manufactures disagreements that aren't there.
+
+**Correction:** wrote the price bands independently of the seeder's ranges rather than importing
+them. Sharing the constant would make the rule circular — able to catch only what the seeder
+happens not to generate, and silently useless on real data.
+
+---
+
+### 39. Extracting a traced wrapper dropped a guard that looked like formatting
+
+**Prompt:** MCP tools and the agent must write identical `TraceLog` rows, so the tracing has
+to live in the service layer, not in the MCP adapter.
+
+**Result:** `check_listings()` traces the batch (not `check_listing`, which would write a row
+per candidate), and a new `geo_search()` wrapper traces around
+`search_listings_by_distance()`. `agent_name` distinguishes the callers: the agent leaves the
+default, the MCP server passes `"mcp"`. The error path traces too — a tool call that failed is
+still a tool call.
+
+**Correction:** the extraction broke `/api/match/` outright. The old inline trace passed
+`str(query.max_price)` into `arguments`, which reads as incidental formatting but is load-
+bearing: `TraceLog.arguments` is a `JSONField` and `Decimal` isn't JSON-serialisable. The new
+wrapper passed `filters` through raw and every priced search raised `TypeError`. Restored as
+`_json_safe()`. Moving code past a guard you don't recognise silently deletes it.
+
+**Correction:** `retrieve_candidates` had to *stop* tracing once `geo_search` traced, or every
+retrieval wrote two `geo_search` rows into the same run.
+
+---
+
+### 40. Trust-check belongs before compaction, not after ranking
+
+**Prompt:** Wire the tool into the agent so flags reach the model, not the response.
+
+**Result:** `retrieve_candidates` now returns `(listing, distance, trust_report)` triples and
+runs the check between retrieval and prompt building — so a flagged listing reaches the ranker
+as `| flags: thin_description(medium)` on its candidate line, with an instruction to downrank
+high-severity flags. Clean listings add no text and cost no tokens. Trust-checking happens after
+the candidate cap, so nothing is checked that was already discarded.
+
+**Correction:** the shape change had four call sites — the prompt builder, the `valid_ids` set,
+the degraded fallback, and the view's step numbering — and the degraded path is the one no normal
+run exercises. Forced it with a patched provider before believing it. Also made the degraded
+fallback carry flag codes into `concerns`: the ranker is gone in that path, but the rules are
+deterministic and still worth showing.
+
+---
+
+### 41. A stdio server that "drops the connection" may just be EOF
+
+**Prompt:** Expose the tools over MCP and prove a client can drive them.
+
+**Result:** `geo_search`, `trust_check` and a `listing://{id}` resource, all thin adapters over
+the service layer. Argument validation names the offending argument
+(`lat must be between -90 and 90, got 400`) and the category error lists the valid values
+generated from `Listing.Category.values`, so it can't drift from the model. Claude Code chained
+`geo_search` → 3× `trust_check` unprompted, ranked the results by the severity field, and
+repeated the tool's own "consistency, not honesty" caveat to the user. Given a bad category it
+read the error and retried with a valid one on its own.
+
+**Correction:** the first smoke test piped requests and let stdin hit EOF immediately. The two
+validation-only calls answered; every call that touched the database vanished and the next got
+`Connection closed`. Nothing was broken — the server began shutting down on EOF while the
+slower calls were still on a worker thread. That failure mode is indistinguishable from a
+crashed server, and cost more time than the feature did.
+
+**Correction:** mcp 2.0 renamed `FastMCP` to `MCPServer`, so the Week 5 import didn't apply. It
+also dispatches sync tools through `anyio.to_thread.run_sync`, which means ORM calls land in a
+real thread and `DJANGO_ALLOW_ASYNC_UNSAFE` — which I'd assumed was required — is not needed.
+Checking the installed package beat carrying an assumption forward from a different version.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -681,6 +788,18 @@ Stale memory is worse than no memory.
   .env` step I'd just documented would have failed for anyone but me. Nothing else in the
   setup, including the full `requirements.txt` install, was wrong; the one gap was invisible
   from inside a working tree.
+- **Build the fixtures before the rules that read them.** Every trust rule looked fine in
+  isolation; two were worthless against the actual data — one fired on 100% of rows, one on
+  80% as pure seed artifact. Neither is visible from reading the rule. Check what a new
+  detector *actually* flags across the whole table before trusting a passing spot-check.
+- **A guard can look like formatting.** `str(query.max_price)` in a trace call read as
+  cosmetic; it was the only thing keeping a `Decimal` out of a `JSONField`. Moving code past
+  something you don't recognise deletes it silently. When a refactor relocates a call, read
+  what the original was doing to its arguments, not just where it went.
+- **Verify the library you have, not the one you remember.** mcp 2.0 renamed `FastMCP` and
+  changed how sync tools are dispatched, which invalidated both the import and a workaround I'd
+  planned for an error that can no longer occur. Two minutes inspecting the installed package
+  replaced two assumptions.
 - **A model string is not a model decision.** The provider named Opus while `MAX_IMAGE_DIM`
   was tuned for a cheaper tier and the call skeleton carried settings that contradicted both.
   Nothing errored, because none of it had ever run. Unexecuted code drifts silently — the

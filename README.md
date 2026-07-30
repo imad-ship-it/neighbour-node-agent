@@ -214,7 +214,7 @@ Each role resolves its provider independently in
 jobs are matched to different models on their merits — and the same input can be routed to
 two models for comparison via the `override` argument.
 
-**Extraction → Claude (Opus 4.8, `claude-opus-4-8`).** The input is an *image*, which rules
+**Extraction → Claude (Haiku 4.5, `claude-haiku-4-5`).** The input is an *image*, which rules
 out text-only models entirely, and the output must be schema-valid JSON. Of the five
 extracted fields, four are easy: `title` and `description` are short, and `category` and
 `condition` are constrained enums that the Pydantic schema validates against the Django
@@ -223,16 +223,31 @@ what it is, often reading a brand or model off the object itself, and judging we
 photo. That is where vision quality actually shows up, and it is the field that makes the
 feature useful rather than a captioner.
 
-Two cost levers are deliberately left off:
+That reasoning originally argued for a frontier model, and it was tested rather than assumed.
+Run live against three real photos, Haiku 4.5 read "Magic Bullet" off the logo unprompted and
+graded a battered angle grinder `fair` ("visible signs of wear") while grading two clean items
+`like_new`. Both of the capabilities the argument rests on — identifying the item and judging
+wear — held on the cheapest vision tier. The prices it produced were wrong, but for a reason
+that had nothing to do with the model: the prompt said "second-hand item" and asked for "a
+number in USD", so it returned resale values. Rewording the field to *daily lending rate* took
+a $25 blender to $3 with no model change. See `prompts.md` entries 46-47.
 
-- **Image input is capped at 1568px** on the long edge (`MAX_IMAGE_DIM`). Higher resolution
-  roughly triples image tokens; it is worth raising only if the model is measurably
-  misreading small text on items.
-- **Extended thinking is off.** Filling five fields from a photo does not need multi-step
-  reasoning, and thinking tokens bill at the (5×) output rate.
+Two knobs, both matched to the tier:
 
-That lands at roughly **$0.012 per extraction** (~1,800 input / ~100 output tokens), and the
-24-hour SHA-256 result cache means repeated development runs on the same photo cost nothing.
+- **Image input is capped at 1568px** on the long edge (`MAX_IMAGE_DIM`) — which is exactly
+  the cap Haiku 4.5's vision tier is built around. (Opus 4.7+ reads up to 2576px, so the
+  earlier pairing of a frontier model with a 1568 cap was paying frontier rates for
+  lower-tier fidelity.)
+- **No thinking, no `effort`.** Haiku 4.5 predates adaptive thinking, so omitting the
+  `thinking` parameter means none — which is right for five short fields. `output_config.effort`
+  is deliberately absent too: it is **rejected** on Haiku 4.5 and would 400.
+
+That lands at roughly **$0.0023 per extraction** (~1,800 input / ~100 output tokens), about a
+fifth of the frontier-tier cost.
+
+> The 24-hour SHA-256 result cache is **per process**. With no `CACHES` block configured,
+> Django uses `LocMemCache`, which lives in memory and dies with the process — so it saves
+> repeat calls inside a running server, but a fresh script run re-pays for the same photo.
 
 **Matching → DeepSeek (`deepseek-chat`).** This role is text-only — free text in, a
 structured `MatchQuery` out, then ranking with Markdown explanations. It is structured

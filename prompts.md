@@ -1063,6 +1063,58 @@ diagnose. Noted while it is still theoretical.
 
 ---
 
+### 52. The match UI, and the field no client could have computed
+
+**Prompt:** Build the match UI — search box, results list, `MatchExplanation` rendering the
+Markdown, wired to `/api/match/`.
+
+**Result:** The obvious plan was a client-side join: `MatchResponse.matches` carries only
+`listing_id`, and the app already holds every listing in a TanStack cache, so joining in the
+browser looked free. It isn't possible. **`distance_km` is computed per search by haversine
+and is not a field on `Listing`** — no join against `/api/listings/` could ever produce
+"1.4 km away", which is the single most important fact in a *neighbourhood* lending app.
+
+So the service resolves it instead: a `ListingSummary` schema, populated in `rank_candidates`
+from the candidates it is already holding. `RankedMatch` stays unchanged — the model should
+not be echoing back data we already have, and anything it echoed would need verifying against
+the database anyway. Two tests, one of them for the degraded path specifically, because that
+branch builds its own `matches` list and would otherwise render a blank card at exactly the
+moment the ranker is already broken.
+
+Frontend: `useMatch` (a **mutation**, not a query — `useQuery` refetches on window focus,
+which would silently re-bill a paid LLM call and mutate the user's `MatchSession` memory
+every time they alt-tabbed), `MatchExplanation`, `MatchCard`, and a `Match` page whose real
+substance is five response states, not the form.
+
+**Correction:** `react-markdown` over a hand-rolled renderer, and the reason is not
+convenience. The explanation is **model output — untrusted input that happens to look like
+content**. Every hand-rolled Markdown renderer ends at `dangerouslySetInnerHTML`, which would
+be an XSS sink fed directly by an LLM. The component also flattens block elements (a stray
+`<h1>` must not restructure a card), drops `href`s while keeping link text (a model-authored
+URL in a lending recommendation is a phishing surface the user has every reason to trust),
+and renders `<img>` as nothing. Cost: roughly 100KB gzipped, which is a real price and worth
+stating rather than discovering later.
+
+**Correction:** entry 50's variance showed up on the very first live search — "Nothing nearby
+fits that", then the same query returned a match. That is why the empty state was built to
+read as an answer rather than an error, and why it needed building *before* it was seen
+rather than after a user reported the app as broken.
+
+**The payoff, in one chip.** A live search for "something to help me move furniture" returned
+a folding camping table at 45%, with two amber concerns: *"no photo available – you can't see
+the item"* and *"sporting goods category differs from furniture"*. Trace the first back:
+a seed fixture with `image=""` → `_check_photo` → `TrustFlag(code="no_photo", severity="low")`
+→ `_format_flags` writes `flags: no_photo(low)` into the rank prompt → DeepSeek reads the
+machine flag and rewrites it as a sentence a person can act on. Every layer built across the
+MCP, testing and live-provider blocks is visible in that one chip.
+
+It also showed the entry-49 fix holding under a harder case: the model offered a stretch and
+**labelled it as a stretch in its own concerns**, instead of the pre-fix behaviour of ranking
+an extension cord for cutting metal with invented capability. Self-declared padding is a
+different failure class from fabricated fit.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-

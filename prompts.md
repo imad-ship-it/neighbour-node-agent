@@ -1168,6 +1168,67 @@ numerically, stated as a claim instead of a check.
 
 ---
 
+### 54. Bookmarks as a template, and two bugs that don't throw
+
+**Prompt:** Build bookmarks — but treat it as the template messaging and notifications will
+copy twice, not as a feature. Decide the conventions consciously and write the checklist down.
+
+**Result:** The framing changes the deliverable. The artifact isn't the feature, it's
+`docs/api-conventions.md` — nine rules, each with its reasoning and its messaging analogue,
+so tomorrow is a checklist instead of a re-derivation.
+
+Reading the code first changed the plan twice. **An action-style
+`POST /listings/{id}/bookmark/` already existed**, so this was a cutover with an ordering
+constraint (retire it *after* the frontend moves, or the UI breaks mid-work), not a build.
+And **the N+1 the brief warned about was already live** — `ListingSerializer` had a
+`SerializerMethodField` running `.exists()` per row, so the unpaginated 47-listing page cost
+48 queries. Measured after: 1.
+
+Three decisions, made once and recorded:
+
+- **Resource style over toggle.** A toggle races itself — two quick clicks send two POSTs
+  and the second can flip state back before the first lands, with no error anywhere. Create
+  and delete are separately idempotent; a toggle isn't idempotent at all.
+- **404, not 403, on someone else's row** — via `get_queryset` filtering, so the "permission
+  check" is the query. Worth noting this creates a *deliberate* inconsistency with
+  `listings`, which 403s: a listing is a public resource whose existence isn't secret, a
+  bookmark is a private row. The rule is "public resource → 403, private row → 404", and
+  having the one-sentence version ready is the difference between principled and sloppy.
+- **Idempotent create**, which paid off somewhere I didn't predict. During the optimistic
+  window `bookmark_id` is null, because the real id only exists once the server answers. A
+  second click in that window re-POSTs — and returns the same row instead of a 400. Choosing
+  "reject duplicates" in the morning would have produced an error toast at 5pm.
+
+**Two bugs that don't throw**, which is what made them worth the day:
+
+1. **A DRF `read_only` field whose attribute is missing doesn't raise — it drops the key from
+   the response entirely.** The create endpoint serializes a freshly saved instance that never
+   went through `get_queryset`, so without `default=False` the response simply has no
+   `is_bookmarked`, the client reads `undefined`, and `undefined` is falsy. The bookmark icon
+   would render correctly *by accident*. I only found it by probing the serializer instead of
+   assuming it would error like a normal missing attribute.
+2. **Annotations don't survive a serializer boundary.** `BookmarkSerializer` nests
+   `ListingSerializer`, whose bookmark fields come from `ListingViewSet.get_queryset` — which
+   never runs on that path. Left alone, every card on My Bookmarks draws an *empty* bookmark
+   icon on a page that exists only to show saved things. Both values are knowable without a
+   query, so `to_representation` sets them.
+
+**Correction:** the naive write serializer is the one an IDE writes for you.
+`fields = ["id", "listing", "user", "created_at"]` is exactly what a `ModelSerializer` wants
+to generate, and it lets any authenticated caller create rows on another account. Rather than
+trust the test that guards it, I wrote the naive version and ran the test against it — it
+failed with `<User: bob> != <User: alice>`, alice's request creating a bookmark owned by bob.
+Did the same for the query-count guard (dropped `select_related`, 3 → 13 queries). Entry 44's
+lesson applied deliberately for once, rather than after being burned.
+
+Retiring the action endpoint also deleted a **permissions special-case**: `get_permissions`
+existed solely to suppress `IsOwnerOrReadOnly` for bookmarking, because bookmarking is a POST
+against someone else's listing. Under resource style the exception disappears — a bookmark is
+your own row, so ownership is the normal case. An exception in the permission layer was a
+smell about the URL shape, and I'd have read it as "bookmarks are just special".
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1276,3 +1337,18 @@ numerically, stated as a claim instead of a check.
   had to import nothing from Django, or "the tools work over the protocol" would have been an
   untested claim dressed as a screenshot. What a demo is *forbidden* to touch is what makes it
   evidence.
+- **Ask whether a missing value throws or vanishes.** A DRF `read_only` field with no attribute
+  behind it drops its key from the response instead of raising, and the client reads `undefined`
+  — falsy, plausible, silent. I'd assumed it would error, because that's what a missing
+  attribute normally does. Whenever a value might be absent, find out which of the two failure
+  modes the library picked; only one of them tells you.
+- **Write the broken version and run the test against it.** Stronger than asking what a green
+  test would look like if the code were broken (entry 44) — actually make the code broken. The
+  owner-spoofing test and the query-count guard both looked obviously correct and I only *knew*
+  they worked after watching them fail. Two minutes each, and it's the only thing separating a
+  test from a comment.
+- **An exception in the permission layer is usually a smell about the URL shape.**
+  `get_permissions` existed only to suppress the ownership check for bookmarking — because
+  bookmarking is a POST against someone else's listing. Moving to a resource where the row is
+  your own deleted the exception outright. A carve-out that reads as "this endpoint is just
+  special" is worth one question: special compared to what shape?

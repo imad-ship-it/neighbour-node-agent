@@ -1,4 +1,4 @@
-"""Test doubles shared across app test suites.
+"""Test doubles and fixtures shared across app test suites.
 
 Deliberately NOT in a tests.py: this is imported by apps.listings.tests and
 apps.matching.tests, and importing across test modules breaks as soon as the
@@ -6,7 +6,66 @@ runner collects them in a different order.
 """
 
 from contextlib import contextmanager
+from decimal import Decimal
 from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+
+TEST_PASSWORD = "pw-not-a-secret-1234"
+
+# The point every geo test measures from. Matches the seed data's reference
+# point, so a distance asserted here means the same thing as one seen in the app.
+TEST_LAT = 40.0
+TEST_LNG = -75.0
+
+# Defaults chosen to be trust-CLEAN: the description clears both the character
+# and word floors, the price sits inside the tools band, the title agrees with
+# the category, and there's a photo. A test therefore only ever sees the flags it
+# deliberately asked for — override one field to trip exactly one rule.
+CLEAN_LISTING = {
+    "title": "Cordless Drill",
+    "description": "A well-kept cordless drill with two batteries and a charger.",
+    "category": "tools",
+    "condition": "good",
+    "price": Decimal("20.00"),
+    "image": "listings/x.jpg",
+    "is_available": True,
+}
+
+
+def make_user(username, **overrides):
+    """A user with a usable password, so a test can authenticate for real if it
+    needs to rather than only via force_authenticate."""
+    return get_user_model().objects.create_user(
+        username=username,
+        password=overrides.pop("password", TEST_PASSWORD),
+        **overrides,
+    )
+
+
+def make_listing(lender, title=None, lat=TEST_LAT, lng=TEST_LNG, **overrides):
+    """One listing owned by `lender`, clean unless you say otherwise.
+
+    Tests build rows with this rather than calling seed_data, which is random —
+    a fixture that varies run to run can't support an assertion about which rule
+    fired.
+
+    There is deliberately no "make me two users and a listing" wrapper. Roles
+    differ per suite (owner/non-owner here, sender/recipient in messaging), so
+    the three explicit lines in setUp read better than an opaque helper and are
+    what another suite should copy:
+
+        self.owner = make_user("owner")
+        self.other = make_user("other")
+        self.listing = make_listing(self.owner)
+    """
+    from apps.listings.models import Listing
+
+    fields = {**CLEAN_LISTING, "lender": lender, "latitude": lat, "longitude": lng}
+    if title is not None:
+        fields["title"] = title
+    fields.update(overrides)
+    return Listing.objects.create(**fields)
 
 
 class ScriptedProviderExhausted(AssertionError):

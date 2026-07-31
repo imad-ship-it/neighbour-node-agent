@@ -156,6 +156,32 @@ Not "some tests" — these four, because each covers a failure that passes silen
 
 Test 2 is the one that passes without being written, which is exactly why it's listed.
 
+**Worked examples to copy:** `apps/bookmarks/tests.py` is organised under these four
+headings. `ListingPermissionTests` in `apps/listings/tests.py` is the public-resource
+counterpart — same shape, 403 instead of 404.
+
+**Test through the endpoint, never by instantiating the permission class.** The bugs live
+in the wiring — which permission classes are attached, whether the object-level check is
+reached at all, whether `DELETE` takes the same path as `PATCH` — and a unit test of
+`IsOwnerOrReadOnly` would pass happily while the endpoint sat wide open. That is precisely
+how the earlier `IsAuthenticatedOrReadOnly`-only version let any logged-in user edit any
+listing.
+
+**Fixtures come from `apps.core.testing`.** `make_user` and `make_listing` build on a
+`CLEAN_LISTING` dict whose defaults are deliberately trust-clean, so a test overrides one
+field and sees one flag. Three lines in `setUp` is the pattern to copy:
+
+```python
+self.owner = make_user("owner")
+self.other = make_user("other")
+self.listing = make_listing(self.owner)
+```
+
+**Then break the code and watch the test fail.** Every guard here was verified that way —
+drop `select_related` and the query-count test fails; remove `IsOwnerOrReadOnly` and four
+permission tests fail naming the exact caller; reorder `RULES` and only the flag-order test
+fails. Two minutes per guard, and it is the only thing separating a test from a comment.
+
 ## 9. Frontend: mutation in a hook, state from the payload
 
 The mutation lives in a `use<Thing>Toggle` hook. The card stays presentational and reads

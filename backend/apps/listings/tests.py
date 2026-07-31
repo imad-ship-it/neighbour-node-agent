@@ -2,8 +2,7 @@ import io
 from decimal import Decimal
 
 from apps.bookmarks.models import Bookmark
-from apps.core.testing import scripted_provider
-from django.contrib.auth import get_user_model
+from apps.core.testing import make_listing, make_user, scripted_provider
 from django.core.cache import cache
 from django.db import connection
 from django.test import TestCase, override_settings
@@ -12,8 +11,6 @@ from rest_framework.test import APIClient
 
 from .models import Listing
 from .services import ExtractionError, InvalidImageError, extract_listing_from_image
-
-User = get_user_model()
 
 
 def png_bytes(color=(255, 0, 0)):
@@ -165,27 +162,13 @@ class BookmarkAnnotationTests(TestCase):
     """
 
     def setUp(self):
-        self.alice = User.objects.create_user(
-            username="alice", password="pw-alice-1234"
-        )
-        self.bob = User.objects.create_user(username="bob", password="pw-bob-1234")
-        self.saved = self.make_listing("Saved Drill")
-        self.unsaved = self.make_listing("Unsaved Ladder")
+        self.alice = make_user("alice")
+        self.bob = make_user("bob")
+        self.saved = make_listing(self.bob, "Saved Drill")
+        self.unsaved = make_listing(self.bob, "Unsaved Ladder")
         Bookmark.objects.create(user=self.alice, listing=self.saved)
 
         self.client = APIClient()
-
-    def make_listing(self, title):
-        return Listing.objects.create(
-            lender=self.bob,
-            title=title,
-            description="A perfectly ordinary item, described at length.",
-            category=Listing.Category.TOOLS,
-            condition=Listing.Condition.GOOD,
-            price=Decimal("15.00"),
-            latitude=40.0,
-            longitude=-75.0,
-        )
 
     def payload_for(self, title, response):
         return next(row for row in response.data if row["title"] == title)
@@ -269,7 +252,7 @@ class BookmarkAnnotationTests(TestCase):
             self.client.get("/api/listings/")
 
         for index in range(10):
-            listing = self.make_listing(f"Extra Item {index}")
+            listing = make_listing(self.bob, f"Extra Item {index}")
             if index % 2 == 0:
                 Bookmark.objects.create(user=self.alice, listing=listing)
 
@@ -283,3 +266,125 @@ class BookmarkAnnotationTests(TestCase):
             f"Query count grew from {len(baseline)} to {len(grown)} after adding "
             "10 listings — the bookmark state is being looked up per row again.",
         )
+
+
+class ListingPermissionTests(TestCase):
+    """Object permissions on /api/listings/, exercised through the endpoint.
+
+    Deliberately NOT by instantiating IsOwnerOrReadOnly and calling
+    has_object_permission directly. The bugs this guards against live in the
+    wiring — which permission classes are attached, whether the object-level
+    check is reached at all, whether DELETE goes through the same path as
+    PATCH — and a unit test of the class would pass happily while the endpoint
+    sat wide open. That is exactly how the earlier `IsAuthenticatedOrReadOnly`-
+    only version let any logged-in user edit any listing.
+
+    A listing is a PUBLIC resource, so a non-owner write is 403, not 404 —
+    its existence is not a secret. Private rows (bookmarks, and messaging
+    threads on Saturday) 404 instead. See docs/api-conventions.md rule 2.
+    """
+
+    def setUp(self):
+        self.owner = make_user("owner")
+        self.other = make_user("other")
+        self.admin = make_user("admin", is_staff=True)
+        self.listing = make_listing(self.owner, "Owner's Drill")
+        self.url = f"/api/listings/{self.listing.id}/"
+
+    def client_for(self, user):
+        """An APIClient acting as `user`, or anonymous when user is None."""
+        client = APIClient()
+        if user is not None:
+            client.force_authenticate(user=user)
+        return client
+
+    def valid_payload(self, **overrides):
+        payload = {
+            "title": "A New Drill",
+            "description": "Plenty of detail so the description rule stays quiet.",
+            "category": Listing.Category.TOOLS,
+            "condition": Listing.Condition.GOOD,
+            "price": "20.00",
+            "latitude": 40.0,
+            "longitude": -75.0,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_reads_are_public(self):
+        """IsAuthenticatedOrReadOnly must not over-block: browsing is the point
+        of the app and works logged out."""
+        anonymous = self.client_for(None)
+
+        self.assertEqual(anonymous.get("/api/listings/").status_code, 200)
+        self.assertEqual(anonymous.get(self.url).status_code, 200)
+
+    def test_write_access_by_caller(self):
+        cases = [
+            ("anonymous", None, 401),
+            ("authenticated non-owner", self.other, 403),
+            ("owner", self.owner, 200),
+            ("admin", self.admin, 200),
+        ]
+        for label, user, expected in cases:
+            with self.subTest(caller=label):
+                response = self.client_for(user).patch(
+                    self.url, {"title": f"Renamed by {label}"}, format="json"
+                )
+                self.assertEqual(response.status_code, expected)
+
+    def test_rejected_writes_leave_the_row_unchanged(self):
+        """A refused request must also be a request that did nothing. The status
+        code alone doesn't prove the write was stopped before it landed."""
+        original = self.listing.title
+
+        for label, user in (("anonymous", None), ("non-owner", self.other)):
+            with self.subTest(caller=label):
+                self.client_for(user).patch(
+                    self.url, {"title": "Hijacked"}, format="json"
+                )
+                self.listing.refresh_from_db()
+                self.assertEqual(self.listing.title, original)
+
+    def test_delete_follows_the_same_rules_as_patch(self):
+        """Object permissions are checked per request, so a rule proven on PATCH
+        is not proven on DELETE. Testing only one method is how a hole stays
+        open on the other."""
+        for label, user, expected in (
+            ("anonymous", None, 401),
+            ("non-owner", self.other, 403),
+        ):
+            with self.subTest(caller=label):
+                response = self.client_for(user).delete(self.url)
+                self.assertEqual(response.status_code, expected)
+                self.assertTrue(Listing.objects.filter(pk=self.listing.id).exists())
+
+        response = self.client_for(self.owner).delete(self.url)
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Listing.objects.filter(pk=self.listing.id).exists())
+
+    def test_anonymous_cannot_create(self):
+        response = self.client_for(None).post(
+            "/api/listings/", self.valid_payload(), format="json"
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertFalse(Listing.objects.filter(title="A New Drill").exists())
+
+    def test_lender_comes_from_the_request_not_the_payload(self):
+        """The listings equivalent of the bookmarks owner-spoofing test.
+
+        `lender` is read-only and set in perform_create, so a payload naming
+        someone else is ignored. Without this, a caller could file listings
+        under another user's account — and nothing else in the suite would
+        notice.
+        """
+        response = self.client_for(self.other).post(
+            "/api/listings/",
+            self.valid_payload(lender=self.owner.id),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        created = Listing.objects.get(pk=response.data["id"])
+        self.assertEqual(created.lender, self.other)

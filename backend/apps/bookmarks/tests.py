@@ -6,10 +6,7 @@ private-row feature gets, each covering a failure that otherwise passes
 silently. Copy the shape, not just the ideas.
 """
 
-from decimal import Decimal
-
-from apps.listings.models import Listing
-from django.contrib.auth import get_user_model
+from apps.core.testing import make_listing, make_user
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -17,33 +14,19 @@ from rest_framework.test import APIClient
 
 from .models import Bookmark
 
-User = get_user_model()
-
 
 class BookmarkAPITests(TestCase):
     def setUp(self):
-        self.alice = User.objects.create_user(
-            username="alice", password="pw-alice-1234"
-        )
-        self.bob = User.objects.create_user(username="bob", password="pw-bob-1234")
+        self.alice = make_user("alice")
+        self.bob = make_user("bob")
 
-        self.drill = self.make_listing("Cordless Drill")
-        self.ladder = self.make_listing("Folding Ladder")
+        # Bob owns the listings; Alice bookmarks them. Bookmarking someone
+        # else's listing is the normal case, so the fixture reflects that.
+        self.drill = make_listing(self.bob, "Cordless Drill")
+        self.ladder = make_listing(self.bob, "Folding Ladder")
 
         self.client = APIClient()
         self.client.force_authenticate(user=self.alice)
-
-    def make_listing(self, title):
-        return Listing.objects.create(
-            lender=self.bob,
-            title=title,
-            description="A perfectly ordinary item, described at length.",
-            category=Listing.Category.TOOLS,
-            condition=Listing.Condition.GOOD,
-            price=Decimal("15.00"),
-            latitude=40.0,
-            longitude=-75.0,
-        )
 
     # ------------------------------------------------------------------
     # Rule 8.1 — scoping. Another user's row does not exist, as far as you
@@ -139,7 +122,7 @@ class BookmarkAPITests(TestCase):
 
         for index in range(10):
             Bookmark.objects.create(
-                user=self.alice, listing=self.make_listing(f"Extra Item {index}")
+                user=self.alice, listing=make_listing(self.bob, f"Extra Item {index}")
             )
 
         with CaptureQueriesContext(connection) as grown:

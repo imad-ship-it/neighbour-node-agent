@@ -1,15 +1,13 @@
 import json
+from decimal import Decimal
 from uuid import uuid4
 
 from apps.core.models import TraceLog
-from apps.core.testing import scripted_provider
-from apps.listings.models import Listing
-from django.contrib.auth import get_user_model
+from apps.core.testing import make_listing, make_user, scripted_provider
 from django.test import TestCase
 
 from .services import rank_candidates, retrieve_candidates, understand_query
-
-User = get_user_model()
+from .trust import TrustCheckError, check_listing, check_listing_by_id
 
 # The search point every test uses.
 LAT, LNG = 40.0, -75.0
@@ -53,29 +51,17 @@ def rank_json(*listing_ids):
 
 class MatchAgentTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username="tester", password="pw")
+        self.user = make_user("tester")
 
     def _listing(self, title, lat, lng, **overrides):
-        """One listing at a known point.
+        """One listing at a known point, owned by this suite's user.
 
-        Tests build their own rows rather than calling seed_data, which is
-        random. Defaults are deliberately trust-CLEAN — good description, has a
-        photo, sane price — so a test only sees flags it asked for.
+        Thin wrapper over the shared factory so these tests keep their
+        positional (title, lat, lng) call style — the defaults themselves live
+        in apps.core.testing and are shared with the listings and bookmarks
+        suites.
         """
-        fields = {
-            "lender": self.user,
-            "title": title,
-            "description": "A well-kept item with plenty of detail in the text.",
-            "category": "tools",
-            "condition": "good",
-            "price": 20,
-            "latitude": lat,
-            "longitude": lng,
-            "image": "listings/x.jpg",
-            "is_available": True,
-        }
-        fields.update(overrides)
-        return Listing.objects.create(**fields)
+        return make_listing(self.user, title, lat, lng, **overrides)
 
     def test_full_run_writes_four_ordered_trace_rows(self):
         listing = self._listing("Cordless Drill", 40.01, -75.01)
@@ -224,3 +210,163 @@ class MatchAgentTests(TestCase):
         rank_prompt = provider.prompts[0]
         self.assertIn("thin_description", rank_prompt)
         self.assertIn(f"id={flagged.id}", rank_prompt)
+
+
+class TrustRuleTests(TestCase):
+    """The four trust rules, one at a time.
+
+    Pure deterministic functions over a single row — no LLM, no network — so
+    this is the cheapest coverage in the project and the only place the rules'
+    actual behaviour is pinned down. MatchAgentTests only proves flags reach the
+    ranking prompt; it would keep passing if every rule returned the wrong code.
+
+    Every fixture starts from CLEAN_LISTING (apps.core.testing) and overrides
+    exactly ONE field. That is the whole design: if a fixture tripped two rules,
+    a green test wouldn't tell you which one fired, and a rule that silently
+    stopped working would hide behind its neighbour.
+    """
+
+    def setUp(self):
+        self.user = make_user("lender")
+
+    def listing(self, **overrides):
+        return make_listing(self.user, **overrides)
+
+    def codes(self, listing):
+        return [flag.code for flag in check_listing(listing).flags]
+
+    def test_a_clean_listing_trips_nothing(self):
+        """The baseline the other fixtures are deviations from. If this ever
+        fails, every other test in this class is meaningless."""
+        report = check_listing(self.listing())
+
+        self.assertEqual(report.flags, [])
+        self.assertIsNone(report.highest_severity)
+
+    def test_each_rule_fires_alone_on_its_own_fixture(self):
+        cases = [
+            (
+                "price far outside its band",
+                {"price": Decimal("1450.00")},
+                "price_out_of_range",
+                "high",
+            ),
+            (
+                "title disagrees with category",
+                {"title": "Professional DSLR Camera"},
+                "title_category_mismatch",
+                "high",
+            ),
+            (
+                "nothing really written",
+                {"description": "Cord."},
+                "thin_description",
+                "medium",
+            ),
+            ("no photo", {"image": ""}, "no_photo", "low"),
+        ]
+        for label, override, code, severity in cases:
+            with self.subTest(rule=label):
+                report = check_listing(self.listing(**override))
+
+                self.assertEqual(
+                    [flag.code for flag in report.flags],
+                    [code],
+                    f"{label!r} must trip exactly one rule — a fixture that trips "
+                    "several can't tell you which rule is broken.",
+                )
+                self.assertEqual(report.flags[0].severity, severity)
+
+    def test_price_severity_depends_on_how_far_outside_the_band(self):
+        """Tools band is $3-$150. Outside is odd (medium); more than
+        OUTLIER_MULTIPLIER beyond it is not a real price (high)."""
+        cases = [
+            ("just above the band", "200.00", "medium"),
+            ("far above the band", "1450.00", "high"),
+            ("implausibly cheap", "0.50", "high"),
+        ]
+        for label, price, severity in cases:
+            with self.subTest(price=label):
+                report = check_listing(self.listing(price=Decimal(price)))
+
+                self.assertEqual([f.code for f in report.flags], ["price_out_of_range"])
+                self.assertEqual(report.flags[0].severity, severity)
+
+    def test_a_title_with_no_known_keyword_produces_no_hint(self):
+        """The right default for a rule that can only ever see one row: silence,
+        not a guess. Anything else would flag every listing whose noun isn't in
+        the keyword table."""
+        listing = self.listing(title="Thingamajig", category="electronics")
+
+        self.assertEqual(self.codes(listing), [])
+
+    def test_a_title_hinting_several_categories_accepts_any_of_them(self):
+        """'Folding Camping Table' hints furniture AND sporting_goods, and either
+        filing is defensible. trust.py calls this case load-bearing, so it gets a
+        test rather than a comment."""
+        for category in ("furniture", "sporting_goods"):
+            with self.subTest(category=category):
+                listing = self.listing(title="Folding Camping Table", category=category)
+
+                self.assertNotIn("title_category_mismatch", self.codes(listing))
+
+    def test_every_broken_rule_reports_in_a_stable_order(self):
+        """trust.py documents RULES order as the report order. That's a promise
+        to anyone reading a trace or a ranking prompt, and nothing else enforces
+        it."""
+        listing = self.listing(
+            price=Decimal("1450.00"),
+            title="Professional DSLR Camera",
+            description="Cord.",
+            image="",
+        )
+
+        report = check_listing(listing)
+
+        self.assertEqual(
+            [flag.code for flag in report.flags],
+            [
+                "price_out_of_range",
+                "title_category_mismatch",
+                "thin_description",
+                "no_photo",
+            ],
+        )
+        self.assertEqual(report.highest_severity, "high")
+
+    def test_evidence_carries_the_values_that_fired(self):
+        """Evidence exists so a judgement can be checked without re-running the
+        rule — it has to hold the actual numbers, not a restatement."""
+        report = check_listing(self.listing(price=Decimal("1450.00")))
+
+        self.assertEqual(
+            report.flags[0].evidence,
+            {"price": 1450.0, "band_low": 3, "band_high": 150},
+        )
+
+
+class TrustCheckByIdTests(TestCase):
+    """The lookup wrapper the MCP server and the match agent both call."""
+
+    def setUp(self):
+        self.user = make_user("lender")
+
+    def test_returns_the_report_for_a_real_listing(self):
+        listing = make_listing(self.user, image="")
+
+        report = check_listing_by_id(listing.id, run_id="run-1")
+
+        self.assertEqual(report.listing_id, listing.id)
+        self.assertEqual([f.code for f in report.flags], ["no_photo"])
+
+    def test_unknown_id_raises_a_typed_error_and_still_traces(self):
+        """An errored tool call is still a tool call. The MCP client gets
+        'Listing 999999 not found.', never a DoesNotExist traceback."""
+        with self.assertRaises(TrustCheckError) as caught:
+            check_listing_by_id(999999, run_id="run-2")
+
+        self.assertIn("999999", str(caught.exception))
+
+        row = TraceLog.objects.get(run_id="run-2")
+        self.assertEqual(row.tool_name, "trust_check")
+        self.assertEqual(row.status, "error")

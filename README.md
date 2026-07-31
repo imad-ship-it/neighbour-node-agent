@@ -442,9 +442,10 @@ Column names and types are verified after each migration with a SQLite browser
   the built-out version of that same join-row shape, and
   [docs/api-conventions.md](docs/api-conventions.md) is the checklist those two should
   follow.
-- Test coverage is 34 tests: extraction, caching and the match agent at service level,
-  plus the bookmarks API and the listing annotations at HTTP level. The trust rules, the
-  MCP tools and the listings write path are still untested, and coverage isn't measured.
+- Test coverage is 49 tests: extraction, caching, the match agent and the four trust rules
+  at service level; the bookmarks API, listing annotations and object permissions at HTTP
+  level. **The MCP tools are still untested** — `mcp_client_demo.py` exercises them by hand
+  but nothing asserts on them in CI. Coverage isn't measured.
 - Real geolocation. The match UI searches from a fixed point matching the seeded data,
   because browser geolocation would put a user nowhere near it.
 - Persistent result cache. `LocMemCache` dies with the process, so the 24h extraction

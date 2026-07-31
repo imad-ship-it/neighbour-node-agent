@@ -25,6 +25,7 @@ urlpatterns = [
     path("api/auth/", include("apps.users.urls")),
     path("api/", include("apps.listings.urls")),
     path("api/", include("apps.matching.urls")),
+    path("api/", include("apps.bookmarks.urls")),
 ]
 
 if settings.DEBUG:

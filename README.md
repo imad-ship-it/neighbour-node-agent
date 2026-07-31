@@ -23,7 +23,10 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
   retry, and 24h result caching).
 - **Listings CRUD** — create, browse, update, delete; the lender is always set server-side
   from the authenticated user.
-- **Bookmarks** — one-tap toggle endpoint per listing.
+- **Bookmarks** — save a listing and browse what you've saved. Resource-style
+  create/delete rather than a toggle, with bookmark state annotated onto listing
+  payloads so a card can un-save without a lookup. See
+  [docs/api-conventions.md](docs/api-conventions.md).
 - **Geo-search** — Haversine great-circle distance to find listings within a radius,
   nearest-first, as a reusable standalone function.
 - **Match agent** — a four-step graph at `/api/match/`: understand the free-text
@@ -118,7 +121,7 @@ neighbour-node-agent/
 │   ├── apps/
 │   │   ├── users/              # custom User model + JWT auth endpoints
 │   │   ├── listings/           # Listing model, API, extraction service + schema
-│   │   ├── bookmarks/          # Bookmark model
+│   │   ├── bookmarks/          # Bookmark model + API (the join-row template)
 │   │   ├── matching/           # match agent, geo-search, trust rules, session memory
 │   │   ├── messaging/          # Conversation / Message models
 │   │   ├── notifications/      # Notification model
@@ -310,11 +313,21 @@ shape of the code around it.
 | `GET`  | `/api/listings/` | public (read) | List listings |
 | `POST` | `/api/listings/` | JWT | Create a listing (lender = you) |
 | `GET`/`PUT`/`PATCH`/`DELETE` | `/api/listings/{id}/` | public read / JWT write | Retrieve / update / delete |
-| `POST` | `/api/listings/{id}/bookmark/` | JWT | Toggle bookmark |
+| `GET`  | `/api/bookmarks/` | JWT | Your saved listings, each with the listing nested |
+| `POST` | `/api/bookmarks/` | JWT | Save a listing (`{"listing": id}`). Idempotent — 201 on create, 200 if already saved |
+| `DELETE` | `/api/bookmarks/{id}/` | JWT | Un-save. Someone else's bookmark 404s, never 403s |
 | `POST` | `/api/listings/extract/` | JWT | Photo → draft listing (multipart `image`, optional `description`) |
 | `POST` | `/api/match/` | JWT | Free text + `lat`/`lng` → ranked matches with explanations. Pass `fresh: true` to ignore session memory |
 
 Authenticated requests use `Authorization: Bearer <access-token>`.
+
+**API conventions.** Bookmarks is the first *join-row* feature — a row whose only job is to
+connect a user to something else. Messaging threads and notifications are the same shape, so
+the decisions were made once, deliberately, in the cheapest place to change them:
+[**docs/api-conventions.md**](docs/api-conventions.md) has the nine rules and the reasoning
+behind each — resource style over toggles, 404-not-403 via queryset scoping, owner from
+`request.user`, idempotent create, annotate instead of per-row lookups, and the four tests
+every private-row feature gets.
 
 ---
 
@@ -425,10 +438,13 @@ Column names and types are verified after each migration with a SQLite browser
 
 ## Known limitations & next steps
 
-- Messaging, notifications and bookmarks are models + migrations only — no API, no UI.
-- Test coverage is service-level (16 tests): extraction, caching, and the match agent.
-  Views, serializers, permissions, the trust rules and the MCP tools are untested, and
-  coverage isn't measured.
+- Messaging and notifications are models + migrations only — no API, no UI. Bookmarks is
+  the built-out version of that same join-row shape, and
+  [docs/api-conventions.md](docs/api-conventions.md) is the checklist those two should
+  follow.
+- Test coverage is 34 tests: extraction, caching and the match agent at service level,
+  plus the bookmarks API and the listing annotations at HTTP level. The trust rules, the
+  MCP tools and the listings write path are still untested, and coverage isn't measured.
 - Real geolocation. The match UI searches from a fixed point matching the seeded data,
   because browser geolocation would put a user nowhere near it.
 - Persistent result cache. `LocMemCache` dies with the process, so the 24h extraction

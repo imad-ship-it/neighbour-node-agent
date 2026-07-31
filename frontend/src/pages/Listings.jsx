@@ -1,4 +1,5 @@
 import { useListings } from '../hooks/useListings'
+import EmptyState from '../components/EmptyState'
 import ListingCard from '../components/ListingCard'
 
 function Listings() {
@@ -20,9 +21,9 @@ function Listings() {
       </header>
 
       {listings.length === 0 ? (
-        <p className="state">
-          No listings yet — run <code>manage.py seed_data</code> or add one.
-        </p>
+        <EmptyState title="No listings yet.">
+          Run <code>manage.py seed_data</code>, or add the first one.
+        </EmptyState>
       ) : (
         <div className="listing-grid">
           {listings.map((listing) => (

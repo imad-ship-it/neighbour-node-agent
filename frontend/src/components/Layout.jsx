@@ -18,6 +18,10 @@ function Layout({ children }) {
           <NavLink to="/create">New listing</NavLink>
           {user ? (
             <>
+              {/* Logged-out visitors have nothing saved, so the link would only
+                  lead to a prompt. The route still handles that case for anyone
+                  arriving by URL. */}
+              <NavLink to="/saved">Saved</NavLink>
               <span className="who">{user.username}</span>
               <button className="btn btn-ghost" onClick={logout}>
                 Log out

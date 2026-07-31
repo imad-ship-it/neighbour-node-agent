@@ -1,12 +1,19 @@
 import io
 from decimal import Decimal
 
+from apps.bookmarks.models import Bookmark
 from apps.core.testing import scripted_provider
+from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
+from rest_framework.test import APIClient
 
 from .models import Listing
 from .services import ExtractionError, InvalidImageError, extract_listing_from_image
+
+User = get_user_model()
 
 
 def png_bytes(color=(255, 0, 0)):
@@ -147,3 +154,132 @@ class ExtractionCacheTests(TestCase):
         self.assertEqual(cached.suggested_price, Decimal("35.00"))
         self.assertEqual(cached.category, Listing.Category.TOOLS)
         self.assertEqual(fresh, cached)
+
+
+class BookmarkAnnotationTests(TestCase):
+    """The bookmark state on a listing payload.
+
+    `is_bookmarked` and `bookmark_id` come from annotations in
+    ListingViewSet.get_queryset, not from a per-row lookup. See
+    docs/api-conventions.md rule 6.
+    """
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="alice", password="pw-alice-1234"
+        )
+        self.bob = User.objects.create_user(username="bob", password="pw-bob-1234")
+        self.saved = self.make_listing("Saved Drill")
+        self.unsaved = self.make_listing("Unsaved Ladder")
+        Bookmark.objects.create(user=self.alice, listing=self.saved)
+
+        self.client = APIClient()
+
+    def make_listing(self, title):
+        return Listing.objects.create(
+            lender=self.bob,
+            title=title,
+            description="A perfectly ordinary item, described at length.",
+            category=Listing.Category.TOOLS,
+            condition=Listing.Condition.GOOD,
+            price=Decimal("15.00"),
+            latitude=40.0,
+            longitude=-75.0,
+        )
+
+    def payload_for(self, title, response):
+        return next(row for row in response.data if row["title"] == title)
+
+    def test_bookmarked_listing_carries_its_bookmark_id(self):
+        """The id is the whole reason DELETE /bookmarks/{id}/ can work without a
+        client-side lookup."""
+        self.client.force_authenticate(user=self.alice)
+        row = self.payload_for("Saved Drill", self.client.get("/api/listings/"))
+
+        self.assertIs(row["is_bookmarked"], True)
+        self.assertEqual(
+            row["bookmark_id"],
+            Bookmark.objects.get(user=self.alice, listing=self.saved).id,
+        )
+
+    def test_unbookmarked_listing_reports_false_and_null(self):
+        self.client.force_authenticate(user=self.alice)
+        row = self.payload_for("Unsaved Ladder", self.client.get("/api/listings/"))
+
+        self.assertIs(row["is_bookmarked"], False)
+        self.assertIsNone(row["bookmark_id"])
+
+    def test_another_users_bookmark_does_not_leak(self):
+        """Alice saved it; Bob must not see it as saved."""
+        self.client.force_authenticate(user=self.bob)
+        row = self.payload_for("Saved Drill", self.client.get("/api/listings/"))
+
+        self.assertIs(row["is_bookmarked"], False)
+        self.assertIsNone(row["bookmark_id"])
+
+    def test_anonymous_reader_gets_the_keys_not_missing_ones(self):
+        """A missing key reads as `undefined` in the client — falsy, plausible,
+        and silent. The anonymous branch annotates literals so the response
+        shape never changes."""
+        row = self.payload_for("Saved Drill", self.client.get("/api/listings/"))
+
+        self.assertIn("is_bookmarked", row)
+        self.assertIn("bookmark_id", row)
+        self.assertIs(row["is_bookmarked"], False)
+
+    def test_create_response_still_carries_the_fields(self):
+        """Regression guard for the serializer defaults.
+
+        A freshly saved instance was never annotated. DRF drops a read_only
+        field whose attribute is missing rather than raising, so without
+        `default=` on these two the create response would silently omit them.
+        """
+        self.client.force_authenticate(user=self.alice)
+        response = self.client.post(
+            "/api/listings/",
+            {
+                "title": "Brand New Saw",
+                "description": "Sharp, boxed, never used in anger.",
+                "category": Listing.Category.TOOLS,
+                "condition": Listing.Condition.NEW,
+                "price": "22.00",
+                "latitude": 40.0,
+                "longitude": -75.0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("is_bookmarked", response.data)
+        self.assertIn("bookmark_id", response.data)
+        self.assertIs(response.data["is_bookmarked"], False)
+        self.assertIsNone(response.data["bookmark_id"])
+
+    def test_query_count_does_not_grow_with_the_number_of_listings(self):
+        """The N+1 guard.
+
+        Asserts the count is UNCHANGED by adding rows rather than pinning an
+        absolute number — the absolute count is an implementation detail that
+        will drift, but "more rows must not mean more queries" is the actual
+        rule. The SerializerMethodField this replaced would fail here: ten more
+        listings meant ten more queries.
+        """
+        self.client.force_authenticate(user=self.alice)
+
+        with CaptureQueriesContext(connection) as baseline:
+            self.client.get("/api/listings/")
+
+        for index in range(10):
+            listing = self.make_listing(f"Extra Item {index}")
+            if index % 2 == 0:
+                Bookmark.objects.create(user=self.alice, listing=listing)
+
+        with CaptureQueriesContext(connection) as grown:
+            response = self.client.get("/api/listings/")
+
+        self.assertEqual(len(response.data), 12)
+        self.assertEqual(
+            len(grown),
+            len(baseline),
+            f"Query count grew from {len(baseline)} to {len(grown)} after adding "
+            "10 listings — the bookmark state is being looked up per row again.",
+        )

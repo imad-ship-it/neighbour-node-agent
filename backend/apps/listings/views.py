@@ -1,6 +1,13 @@
 from apps.bookmarks.models import Bookmark
+from django.db.models import (
+    BooleanField,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Subquery,
+    Value,
+)
 from rest_framework import permissions, status, viewsets
-from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -11,16 +18,41 @@ from .services import ExtractionError, InvalidImageError, extract_listing_from_i
 
 
 class ListingViewSet(viewsets.ModelViewSet):
-    queryset = Listing.objects.all()
+    # No `queryset` attribute: get_queryset() below is the only source of truth,
+    # and the router already names the basename explicitly in urls.py.
     serializer_class = ListingSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
 
-    def get_permissions(self):
-        # Bookmarking is a POST against someone ELSE's listing by design, so the
-        # ownership check must not apply to it — being logged in is enough.
-        if self.action == "bookmark":
-            return [permissions.IsAuthenticated()]
-        return super().get_permissions()
+    def get_queryset(self):
+        """Annotate each listing with the requesting user's bookmark state.
+
+        Two annotations, not one. `is_bookmarked` is what the card renders;
+        `bookmark_id` is what it needs to issue DELETE /api/bookmarks/{id}/.
+        Without the id the client can't delete by resource and you end up
+        reaching for a toggle action endpoint instead — see docs/api-conventions.md
+        rules 1 and 6.
+
+        Annotated rather than computed per row: the SerializerMethodField this
+        replaces ran one .exists() query per listing, so the unpaginated listings
+        page cost 48 queries for 47 rows.
+        """
+        queryset = Listing.objects.all()
+        user = self.request.user
+
+        if not user.is_authenticated:
+            # Reads are public (IsAuthenticatedOrReadOnly) and there's no user to
+            # correlate against. Literal annotations keep the response shape
+            # identical for logged-out callers rather than omitting the fields.
+            return queryset.annotate(
+                is_bookmarked=Value(False, output_field=BooleanField()),
+                bookmark_id=Value(None, output_field=IntegerField()),
+            )
+
+        mine = Bookmark.objects.filter(user=user, listing=OuterRef("pk"))
+        return queryset.annotate(
+            is_bookmarked=Exists(mine),
+            bookmark_id=Subquery(mine.values("id")[:1]),
+        )
 
     def perform_create(self, serializer):
         # is_available is forced rather than left to the model default: on a
@@ -28,17 +60,6 @@ class ListingViewSet(viewsets.ModelViewSet):
         # (it assumes an unchecked HTML checkbox), so the default never applies.
         # A brand-new listing is always available; it's marked on loan later.
         serializer.save(lender=self.request.user, is_available=True)
-
-    @action(detail=True, methods=["post"])
-    def bookmark(self, request, pk=None):
-        listing = self.get_object()
-        bookmark, created = Bookmark.objects.get_or_create(
-            user=request.user, listing=listing
-        )
-        if not created:
-            bookmark.delete()
-            return Response({"bookmarked": False})
-        return Response({"bookmarked": True})
 
 
 class ListingExtractView(APIView):

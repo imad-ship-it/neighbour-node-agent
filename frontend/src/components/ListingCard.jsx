@@ -1,6 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useBookmarkToggle } from '../hooks/useBookmarkToggle'
 import Icon from './Icon'
 
 // Backend values are snake_case enums ("sporting_goods", "like_new").
@@ -8,16 +7,15 @@ function label(value) {
   return value ? value.replace(/_/g, ' ') : ''
 }
 
+/**
+ * One listing, presentationally. Renders on the listings page and on My
+ * Bookmarks, so it holds no bookmark state of its own — `is_bookmarked` comes
+ * annotated on the payload, and the mutation lives in useBookmarkToggle. Local
+ * state here would let two mounted pages disagree about the same listing.
+ */
 function ListingCard({ listing }) {
-  const queryClient = useQueryClient()
   const { user } = useAuth()
-
-  const toggleBookmark = useMutation({
-    mutationFn: () => client.post(`/listings/${listing.id}/bookmark/`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['listings'] })
-    },
-  })
+  const toggleBookmark = useBookmarkToggle()
 
   return (
     <article className="listing-card">
@@ -31,7 +29,7 @@ function ListingCard({ listing }) {
         {user && (
           <button
             className="bookmark"
-            onClick={() => toggleBookmark.mutate()}
+            onClick={() => toggleBookmark.mutate(listing)}
             disabled={toggleBookmark.isPending}
             aria-label={listing.is_bookmarked ? 'Remove bookmark' : 'Bookmark'}
           >

@@ -1229,6 +1229,63 @@ smell about the URL shape, and I'd have read it as "bookmarks are just special".
 
 ---
 
+### 55. Narrow but real: the fixture was the hard part, not the assertions
+
+**Prompt:** Two test targets. Listings permissions through the endpoint — anonymous write,
+non-owner write, owner, admin. And the four trust rules, each with a fixture that trips
+exactly one rule, table-driven.
+
+**Result:** 16 → 49 tests, but the work wasn't in the assertions. It was in making
+"trips exactly one rule" *possible*.
+
+Three near-identical listing factories had accumulated — one in each of the matching,
+listings and bookmarks suites. The matching one carried a comment saying its defaults were
+"deliberately trust-CLEAN — good description, has a photo, sane price — so a test only sees
+flags it asked for". That invariant is the entire precondition for isolating a rule, and it
+lived in a comment in one file, enforced by nothing. So the first move was pulling
+`make_user` / `make_listing` / `CLEAN_LISTING` into `apps/core/testing.py` next to
+`scripted_provider`, then collapsing all three copies onto it. Only then does
+`make_listing(user, price=Decimal("1450.00"))` reliably produce exactly one flag.
+
+I deliberately did **not** write a `make_actors()` wrapper, despite the brief asking for a
+"setUp helper that makes two users and a listing". Roles differ per suite — owner/non-owner
+here, sender/recipient in messaging — so three explicit lines copy better than an opaque
+helper that has to be read before it can be trusted. The three lines are in the factory's
+docstring.
+
+**On testing permissions through the endpoint.** The brief's reasoning was right and worth
+restating: the bugs live in routing and auth wiring, not in the permission class. A unit
+test of `IsOwnerOrReadOnly.has_object_permission` would have passed throughout the period
+when the endpoint was actually wide open, because the class was never attached. I checked
+the real status codes by probing the live endpoint first rather than assuming — anonymous
+writes are **401 not 403**, and only because `JWTAuthentication` supplies a
+`WWW-Authenticate` header; DRF returns 403 when no authenticator does.
+
+Two assertions past the brief's four, both cheap and both covering a hole the four leave:
+
+- **`DELETE` gets its own case.** Object permissions are evaluated per request, so a rule
+  proven on `PATCH` is not proven on `DELETE`.
+- **A refused write must also have written nothing.** A 403 says what the response was, not
+  whether the write landed first, so these `refresh_from_db()` and check.
+
+**Two tests exist because the source documents a promise nothing enforced.** `trust.py` says
+"Order is the order flags appear in a report" and calls the multi-hint title case
+("Folding Camping Table" hints both furniture and sporting_goods) load-bearing. Both were
+comments. Reordering `RULES` now fails exactly one test — the order one, and nothing else,
+which is what tells you it's testing what it claims rather than being incidentally coupled.
+
+**Correction to my own habit:** I broke the code deliberately for every guard this time
+rather than only when something felt shaky — dropped `select_related`, removed
+`IsOwnerOrReadOnly`, reordered `RULES`. Removing the permission class failed four tests and
+the `subTest` label named the case: `caller='authenticated non-owner'` got 200 instead of
+403. A single combined assertion would have said "403 expected" and left me to work out
+which caller. Table-driven isn't just tidier; the failure message is the deliverable.
+
+What this does **not** cover, and the README now says so: the MCP tools. `mcp_client_demo.py`
+exercises them by hand, but nothing asserts on them in CI, and a hand-run demo is not a test.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1352,3 +1409,21 @@ smell about the URL shape, and I'd have read it as "bookmarks are just special".
   bookmarking is a POST against someone else's listing. Moving to a resource where the row is
   your own deleted the exception outright. A carve-out that reads as "this endpoint is just
   special" is worth one question: special compared to what shape?
+- **A test fixture's invariant belongs in code, not in a comment above it.** "Defaults are
+  deliberately trust-CLEAN so a test only sees flags it asked for" was true, important, and
+  enforced by nothing — sitting above one of three copies of the same factory. Isolating a
+  single rule is impossible until that invariant is shared and named. The fixture was the
+  hard part of the testing day; the assertions took minutes.
+- **Test the wiring, not the unit, when the unit is a policy class.** A passing unit test of
+  `IsOwnerOrReadOnly.has_object_permission` proves the logic is right and says nothing about
+  whether it is *attached*. The real bug was a missing entry in `permission_classes`, which
+  only an endpoint test can see. Same for `DELETE`: permissions are evaluated per request, so
+  a rule proven on `PATCH` is not proven on `DELETE`.
+- **The failure message is the deliverable.** Table-driven with `subTest` reported
+  `caller='authenticated non-owner'` got 200 instead of 403 — the broken case named itself.
+  The same four assertions merged into one test would have said "403 expected" and left me
+  bisecting. Choose the test shape by what it says when it fails, not by what it looks like
+  when it passes.
+- **A refused request must also be a request that did nothing.** A 403 describes the
+  response, not whether the write landed before the check. Asserting the status code alone
+  leaves the actual question — did the row change? — untested.

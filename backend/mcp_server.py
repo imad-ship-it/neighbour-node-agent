@@ -39,7 +39,7 @@ from apps.matching.trust import TrustCheckError, check_listing_by_id  # noqa: E4
 from django.db import close_old_connections  # noqa: E402
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
-mcp = MCPServer("neighbour-node")
+mcp = MCPServer("neighbour-node", version="1.0.0")
 
 MAX_RADIUS_KM = 500  # past this a "nearby" search isn't answering the question
 MAX_RESULTS = 50

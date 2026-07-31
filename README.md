@@ -365,6 +365,30 @@ cd backend
 python mcp_server.py
 ```
 
+### Seeing it work
+
+`backend/mcp_client_demo.py` is a small MCP client that spawns the server, completes the
+handshake, discovers the tools off the wire, and calls two of them with fixed inputs
+chosen against the seed data:
+
+```bash
+cd backend
+python mcp_client_demo.py            # handshake, discovery, geo_search, trust_check
+python mcp_client_demo.py discover   # or one step at a time: connect|discover|geo|trust
+```
+
+| | |
+|---|---|
+| [![server running](docs/screenshots/01-server-running.png)](docs/screenshots/01-server-running.png) | [![client connected](docs/screenshots/02-client-connected.png)](docs/screenshots/02-client-connected.png) |
+| **1.** Server running on stdio | **2.** Client connected — handshake |
+| [![tools discovered](docs/screenshots/03-tools-discovered.png)](docs/screenshots/03-tools-discovered.png) | [![geo_search result](docs/screenshots/04-geo-search-result.png)](docs/screenshots/04-geo-search-result.png) |
+| **3.** Both tools and the resource, discovered | **4.** `geo_search` — 3 results, nearest first |
+| [![trust_check result](docs/screenshots/05-trust-check-result.png)](docs/screenshots/05-trust-check-result.png) | |
+| **5.** `trust_check` — one flag, with evidence | |
+
+[**docs/mcp.md**](docs/mcp.md) has the exact command for each shot, why those demo inputs
+were chosen, and how to pull the calls back out of `TraceLog`.
+
 Two things that bite when working on it:
 
 - **stdout is the transport.** A single `print()` corrupts the JSON-RPC stream and the

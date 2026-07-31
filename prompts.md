@@ -1115,6 +1115,59 @@ different failure class from fabricated fit.
 
 ---
 
+### 53. The screenshots were never the artifact
+
+**Prompt:** Five MCP screenshots for the demo, *reproducible* — plus a `docs/mcp.md` with the
+exact commands, so a grader could re-run the sequence and get the same output.
+
+**Result:** The word doing the work was *reproducible*, and it changes the order of operations.
+Capturing first and reconstructing the commands afterwards is how you end up with a shot you
+can't explain in Q&A. So: write the command list, run it end to end, *then* capture.
+
+That forced a real piece of work rather than a screenshot session. `backend/mcp_client_demo.py`
+is a client that **imports nothing from Django or the service layer** — it only speaks the
+protocol. That constraint is the whole point: a client that could reach into `apps.matching`
+proves nothing about MCP. It splits into `connect | discover | geo | trust` so each shot is one
+screen and one idea, and the numbering in its headings starts at 2 so it lines up with the
+screenshot filenames, where shot 1 is the server booting alone.
+
+**The demo inputs were chosen by querying the data, not by picking round numbers.** I ran the
+service directly across candidate radii first: at (40.0, -75.0), 2 km returns one listing, 5 km
+returns six and stops fitting on a slide, 3.5 km returns exactly three. Same for trust — I
+checked all six nearby fixtures and took the one that trips exactly *one* rule (`Basic Claw
+Hammer`, $1,450 against a $3–$150 band, `price_out_of_range` at high). An empty or overflowing
+result makes a bad slide, and a listing tripping three rules makes an unexplainable one.
+
+Two things that fell out of building it properly:
+
+- **The client resolves `listing_id` from the `geo_search` results by title, not a hardcoded
+  primary key.** A reseed shifts every id; hardcoding `378` would have made the demo rot
+  silently. It also makes shots 4 and 5 *chain* — the id in the trust call visibly came from
+  the search above it, which is a better story than two unrelated calls.
+- **mcp 2.0's client API is snake_case throughout** — `server_info`, `protocol_version`,
+  `input_schema`, `resource_templates`, `uri_template`, `structured_content`. Every camelCase
+  name from the older docs `AttributeError`'d. Entry 41's lesson, second time.
+
+`MCPServer("neighbour-node")` was also reporting `v` — `version` defaults to `""`, and nobody
+had looked, because nothing until now displayed it. Set to `1.0.0`.
+
+**The honest bit for Q&A:** under stdio a client *spawns its own server subprocess*. The server
+I start by hand in shot 1 is **not** the one shots 2–5 talk to — which is why its banner
+reappears at the top of each of those frames. Shot 1 still earns its place, but as proof the
+entrypoint boots clean (`django.setup()` runs, imports resolve, nothing writes to stdout), not
+as the process being driven. Documented in `docs/mcp.md` rather than hoped past.
+
+**Correction:** the first five captures came back with wrapped lines — the command split as
+`conne`/`ct`, and worse, `max_price` broken in half mid-parameter. Cause: font size 18 shrank
+the terminal to ~57 columns. I had *asserted* the VS Code terminal would be "wider than 90
+columns" instead of giving a check to run. The longest line in the demo output is 88 characters;
+`$Host.UI.RawUI.WindowSize.Width` takes two seconds and belonged in the setup steps, before
+capture, not in the review afterwards. I decided the wrapping was legible enough to talk over
+and kept them — but the failure was mine and it was the avoidable kind: a constraint I knew
+numerically, stated as a claim instead of a check.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1211,3 +1264,15 @@ different failure class from fabricated fit.
   Nothing errored, because none of it had ever run. Unexecuted code drifts silently — the
   README forced the inconsistency into the open by making me write down *why* the model was
   chosen.
+- **A constraint you know numerically should be written as a check, not a claim.** I knew the
+  demo output's longest line was 88 characters and still wrote "the terminal will be wider than
+  90 columns" instead of `$Host.UI.RawUI.WindowSize.Width` → needs ≥ 95. The number was in my
+  hands and I spent it on an assertion. Wrapped screenshots were the result.
+- **Pick demo inputs by querying the data, not by choosing round numbers.** A 5 km radius looks
+  more natural than 3.5 km and returns twice as much as fits on a slide. Every fixed input in a
+  demo — radius, id, threshold — should be the output of a query you ran, and the reason should
+  be written down next to it.
+- **A demo that reaches past the interface proves nothing about the interface.** The MCP client
+  had to import nothing from Django, or "the tools work over the protocol" would have been an
+  untested claim dressed as a screenshot. What a demo is *forbidden* to touch is what makes it
+  evidence.

@@ -11,6 +11,55 @@ a panel notices.
 
 ---
 
+## The build order
+
+Seven steps, in this order, per app. The rules below explain *why* each one looks the way it
+does — this section is what you execute from, so that building the remaining apps is
+execution rather than re-design.
+
+**Both remaining apps already have their model and migration**, which is why this starts at
+`urls.py` rather than at the model.
+
+| # | Step | Rule | What "done" looks like |
+|---|---|---|---|
+| 1 | `urls.py` + wire into `config/urls.py` | [1](#1-resource-style-not-action-style) | A router with an explicit `basename` (there's no `queryset` attribute to infer it from). Nouns, not verbs. |
+| 2 | ViewSet with scoped `get_queryset` | [2](#2-owner-scoped-get_queryset--404-never-403) | Filtered to `request.user` **in the queryset**, plus `select_related` for anything the serializer reaches through. |
+| 3 | Serializer with request-derived owner | [3](#3-the-owner-comes-from-requestuser-never-the-payload), [7](#7-read-side-nests-a-compact-representation) | No `user`/`sender` field. Write takes ids; read nests what the component renders. |
+| 4 | Permission | [2](#2-owner-scoped-get_queryset--404-never-403) | Usually just `IsAuthenticated` — step 2 already did the access control. Reach for a permission class only for a *public* resource. |
+| 5 | Hook | [9](#9-frontend-mutation-in-a-hook-state-from-the-payload) | Mutation in `use<Thing>X`, optimistic cycle, query keys exported and imported, never re-declared. |
+| 6 | Page | [7](#7-read-side-nests-a-compact-representation) | Route, nav link, and the empty state built **now**, not last. |
+| 7 | Two tests | [8](#8-every-private-row-feature-gets-these-four-tests) | See below. |
+
+### Which two tests
+
+Rule 8 lists four. Under a two-days-three-apps constraint, **these two are the floor**,
+because both cover a failure that passes silently *and* is a security hole rather than a
+polish issue:
+
+1. **Scoping** — another user's row returns 404 on GET *and* DELETE.
+2. **Owner from request** — a payload naming someone else is ignored.
+
+Query-count and duplicate-create are the two to add if the day allows. Skipping them costs
+performance and UX; skipping the first two costs correctness of access control.
+
+### Per-app variants
+
+The two things that differ, named so you don't rediscover them at 11pm:
+
+**Messaging.** A `Conversation`'s second participant is **not a field** — it's
+`listing.lender`. So step 2's scope is `Q(initiator=user) | Q(listing__lender=user)`, not
+`filter(user=...)`. Get this wrong and either a lender can't see their own threads, or
+everyone can see everything. Also: there is **no unique constraint** on
+`(listing, initiator)`, so rule 4's idempotent create is the only thing stopping duplicate
+empty threads — add the constraint (rule 5) or accept that duplicates are possible.
+
+**Notifications.** Rows are **server-created**, so rule 4 barely applies — there is no
+client POST. The work is on the read side: the unread count is a rule-6 annotation, shared
+by the bell badge and the page, and *"mark all read"* is the one legitimate action endpoint
+in the project because it genuinely isn't a single resource.
+
+---
+
 ## 1. Resource style, not action style
 
 `POST /api/bookmarks/` creates, `DELETE /api/bookmarks/{id}/` removes. No

@@ -1331,6 +1331,60 @@ engine difference read backwards.
 
 ---
 
+### 57. Two correct features that were jointly broken
+
+**Prompt:** Messaging Block B — scoping helper, conversation and message endpoints with
+per-participant unread counts, an idempotent thread create, a notification service with a
+collapse rule, and a mark-read endpoint. Backend only, before any React.
+
+**Result:** 54 → 99 tests. The template from bookmarks carried most of it — resource style,
+404-via-scoping, owner from the request, idempotent create, annotate-don't-loop — but three
+things genuinely diverged, and one bug only existed *between* two features that were each
+individually correct.
+
+**Where the bookmarks template stopped working.** `is_bookmarked` was one `Exists` because
+the answer is the same shape for everyone. Unread isn't: which column holds "my last read"
+depends on whether I'm the initiator or the derived lender, so it's a `Case`/`When` on the
+requesting user, in its own `.annotate()` before the `Count` that consumes it. Two SQL facts
+I checked rather than assumed, because both fail silently:
+
+- **`created_at > NULL` is NULL, not true.** Without an explicit `isnull` branch a
+  never-opened conversation reports **zero** unread — the exact opposite of the truth, and
+  it looks entirely plausible on screen.
+- **`Count` joins, `Subquery` doesn't.** Fetching the last message via a join would have
+  multiplied rows against the `Count` and inflated every unread number.
+
+**The find of the block: the collapse rule and the read endpoint are one feature.** Each was
+correct alone. The collapse rule skips creating a notification when an unread one already
+exists for that conversation, so five rapid messages light the bell once. Marking a thread
+read stamps a timestamp. Ship both, forget to clear notifications when reading, and the
+result is not a stuck badge — it is **permanent silence**: the stale unread entry suppresses
+every future notification for that thread, forever. Commenting out one line made
+`test_reading_lets_the_thread_notify_again` fail with `1 != 2`, and nothing else in the suite
+noticed. Two features, each passing its own tests, broken by their interaction.
+
+**Scoping writes by narrowing the field's queryset.** `MessageSerializer.get_fields` sets the
+`conversation` field's queryset to the requester's own threads. A thread you aren't in then
+gets rejected with the identical "object does not exist" error as an id that was never real —
+non-disclosure for free, rather than a membership check afterwards that has to remember not
+to leak which is which.
+
+**A fixture hazard specific to derived participants.** My "someone else's thread" fixture had
+the same user owning both listings, which made them the derived participant on both — so the
+isolation test couldn't distinguish a leak from correct behaviour, and it failed on correct
+code. With derived membership, a fixture meant to be *not mine* has to differ on **every path
+that grants access**, not just the obvious one. Fixed with a fourth user and a comment, since
+someone will otherwise "simplify" it back.
+
+**Correction:** three bugs this block were paste-position errors, not thinking errors —
+`router.register` above `router = DefaultRouter()`, a duplicated `perform_create` where the
+second shadowed the first, and the `read` action pasted into the middle of `create`, which
+severed `create`'s return statement and would have returned `None` from a 201. All three were
+correct code in the wrong place. Two of them ran fine and would only have been caught by
+`ruff` at commit time. Paste new methods at the end of a class body, not mid-method.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1486,3 +1540,17 @@ engine difference read backwards.
   what makes it defensible rather than sloppy is naming the consequence — every unread
   calculation now branches on which participant is asking. Stated now it's a trade-off.
   Discovered in two days' time it's a surprise.
+- **Two features can each be correct and still be broken together.** The notification
+  collapse rule and the mark-read endpoint both passed their own tests; shipping them
+  without clearing notifications on read produced permanent silence, not a stuck badge.
+  Unit-correct is not integration-correct. When one feature's behaviour is *conditional on
+  another feature's state*, the test that matters is the one that runs both in sequence.
+- **Scope the choices, don't check the answer.** Narrowing a serializer field's queryset to
+  what the requester may reference rejects "not yours" with the same error as "doesn't
+  exist" — the non-disclosure comes free. A membership check performed afterwards has to
+  remember to return the right status *and* the right message, and one of those gets it
+  wrong eventually.
+- **A "not mine" fixture must differ on every path that grants access.** With a derived
+  participant, changing the initiator isn't enough — the listing owner grants access too.
+  My isolation fixture shared an owner, so it failed against correct code and would have
+  passed against a leak. A fixture that can't distinguish those two is worse than none.

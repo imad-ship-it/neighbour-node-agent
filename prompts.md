@@ -1286,6 +1286,51 @@ exercises them by hand, but nothing asserts on them in CI, and a hand-run demo i
 
 ---
 
+### 56. Two read columns, because there is no participant row
+
+**Prompt:** Messaging Block A — a named `UniqueConstraint` on `(listing, initiator)` to stop
+duplicate empty threads, plus read-tracking on `Conversation`. Data migration first if
+duplicates already exist.
+
+**Result:** The duplicate check came first and took thirty seconds: **zero conversations,
+zero messages**. No data migration needed, and the hardest part of the block evaporated. The
+plan had budgeted for "keep the oldest row per pair, delete the rest" against a table that
+turned out to be empty. Checking the data before writing the migration that assumes it is
+the cheapest step in any schema change.
+
+**The asymmetry, which is the part worth defending.** Read tracking is two nullable columns —
+`initiator_last_read_at` and `lender_last_read_at` — not one. That follows from the model,
+not from preference: `Conversation` stores `listing` and `initiator`, and **the second
+participant is derived** (`listing.lender`). There is no participant row to hang a single
+`last_read_at` on.
+
+`NULL` means "never opened", which is a real state and genuinely distinct from "opened at
+the epoch", so nullable is right rather than defaulting to a timestamp.
+
+The correct model is a `ConversationParticipant` join table: one column, one code path, and
+"who else is in this thread" stops being a derived question. It is also a mid-sprint refactor
+of a model that two later blocks depend on. So: two columns, deliberately, with the cost
+written down rather than discovered — **every unread calculation now branches on "am I the
+initiator or the lender?"**, which means Block B's unread count cannot be the single `Exists`
+annotation bookmarks used. It needs `Case`/`When` on the requesting user. That is the first
+place messaging genuinely diverges from the bookmarks template, and knowing it now is worth
+more than the column count.
+
+**A verification that looked like a failure and wasn't.** `PRAGMA index_list` reported the
+backing index as `sqlite_autoindex_messaging_conversation_1`, not
+`unique_listing_initiator_conversation` — which reads as "the named constraint didn't
+apply". It did. SQLite implements a table-level `UNIQUE` constraint inside the table
+definition and auto-generates an unnamed index to enforce it; the name is in the DDL, and the
+tell in `index_list` is `origin='u'` (from a constraint) versus `'c'` (a plain
+`CREATE INDEX`). `PRAGMA index_info` confirmed it covers `listing_id` **and** `initiator_id`
+as a pair.
+
+Worth remembering for the Week 7 Postgres switch, where this inverts: Postgres creates a
+genuinely named unique index, so a constraint that "appears" after migrating is the same
+engine difference read backwards.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1427,3 +1472,17 @@ exercises them by hand, but nothing asserts on them in CI, and a hand-run demo i
 - **A refused request must also be a request that did nothing.** A 403 describes the
   response, not whether the write landed before the check. Asserting the status code alone
   leaves the actual question — did the row change? — untested.
+- **Query the data before writing the migration that assumes it.** A whole data-migration
+  step — dedupe, keep the oldest per pair — was planned against a table holding zero rows.
+  Thirty seconds of `select count(*)` deleted the hardest task in the block. The check is
+  always cheaper than the migration it might cancel.
+- **Know how your database renders what you asked for.** SQLite reported my named unique
+  constraint as `sqlite_autoindex_..._1`, which reads exactly like the name not having
+  applied. It had — the name lives in the table DDL, and `origin='u'` in `PRAGMA index_list`
+  is the tell. A verification you can't interpret is worse than none, because it invites you
+  to "fix" something that was already right.
+- **Write down the cost of the shortcut, in the same hour you take it.** Two
+  `last_read_at` columns instead of a participant table is defensible under a deadline;
+  what makes it defensible rather than sloppy is naming the consequence — every unread
+  calculation now branches on which participant is asking. Stated now it's a trade-off.
+  Discovered in two days' time it's a surprise.

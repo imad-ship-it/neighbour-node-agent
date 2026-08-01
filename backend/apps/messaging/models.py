@@ -13,8 +13,22 @@ class Conversation(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Read tracking is split per participant because there is no participant row
+    # to hang a single last_read_at on — a Conversation stores `initiator`, and
+    # the other party is derived (`listing.lender`). Two nullable columns is the
+    # honest shape for that design; NULL means "never opened", which is a real
+    # state and distinct from "opened at the epoch".
+    initiator_last_read_at = models.DateTimeField(null=True, blank=True)
+    lender_last_read_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["listing", "initiator"],
+                name="unique_listing_initiator_conversation",
+            )
+        ]
 
     def __str__(self):
         return f"Conversation on {self.listing} with {self.initiator}"

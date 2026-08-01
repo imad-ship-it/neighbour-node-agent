@@ -2,7 +2,8 @@ from apps.listings.models import Listing
 from apps.listings.serializers import ListingHeaderSerializer
 from rest_framework import serializers
 
-from .models import Conversation
+from .models import Conversation, Message
+from .queries import conversations_for
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -74,3 +75,44 @@ class ConversationSerializer(serializers.ModelSerializer):
             instance.listing, context=self.context
         ).data
         return data
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """One message. Write takes a conversation id and a body, nothing else.
+
+    `sender` is set from request.user in the view — accepting it from the body
+    would let anyone post as anyone. Rule 3.
+    """
+
+    conversation = serializers.PrimaryKeyRelatedField(
+        queryset=Conversation.objects.none()  # replaced per-request in get_fields
+    )
+    sender = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Message
+        fields = ["id", "conversation", "sender", "body", "created_at"]
+        read_only_fields = ["id", "sender", "created_at"]
+
+    def get_fields(self):
+        """Scope the conversation choices to threads the requester is in.
+
+        This is the access control for writes, and it's deliberately done by
+        narrowing the field's queryset rather than by checking membership
+        afterwards. DRF then rejects a thread you aren't in with the same
+        "object does not exist" error it gives for an id that was never real —
+        so the response can't be used to discover which conversations exist.
+        """
+        fields = super().get_fields()
+        request = self.context.get("request")
+        if request is not None:
+            fields["conversation"].queryset = conversations_for(request.user)
+        return fields
+
+    def get_sender(self, message):
+        return {"id": message.sender_id, "username": message.sender.username}
+
+    def validate_body(self, body):
+        if not body.strip():
+            raise serializers.ValidationError("A message can't be empty.")
+        return body

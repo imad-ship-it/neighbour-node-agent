@@ -1,9 +1,14 @@
+from apps.notifications.services import clear_message_notifications, notify_new_message
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from .models import Conversation
-from .queries import annotated_conversations_for
-from .serializers import ConversationSerializer
+from .models import Conversation, Message
+from .queries import annotated_conversations_for, conversations_for, last_read_field_for
+from .serializers import ConversationSerializer, MessageSerializer
 
 
 class ConversationViewSet(
@@ -49,3 +54,91 @@ class ConversationViewSet(
             self.get_serializer(conversation).data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["post"])
+    def read(self, request, pk=None):
+        """Mark this thread read up to now.
+
+        An action rather than a resource-style PATCH, and rule 1 still holds:
+        the field a client would need to address is role-dependent and the
+        client has no business knowing which one it is. It is also genuinely
+        idempotent — setting "read up to now" twice is not a toggle — which is
+        the property rule 1 actually cares about.
+
+        Clearing the notifications is not optional housekeeping: the collapse
+        rule suppresses new notifications while an unread one exists, so leaving
+        them would silence the thread permanently.
+        """
+        conversation = self.get_object()  # 404s for non-participants
+
+        with transaction.atomic():
+            Conversation.objects.filter(pk=conversation.pk).update(
+                **{last_read_field_for(conversation, request.user): timezone.now()}
+            )
+            clear_message_notifications(request.user, conversation.pk)
+
+        # Re-read so the response carries a recomputed unread_count — the client
+        # can use it directly instead of guessing that it's now zero.
+        refreshed = self.get_queryset().get(pk=conversation.pk)
+        return Response(self.get_serializer(refreshed).data)
+
+
+class MessageViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Messages inside threads the requester participates in.
+
+    No update or delete: an edited or vanishing message in someone else's
+    inbox is a feature that needs a design, not a mixin.
+    """
+
+    serializer_class = MessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """Always joined through the scoped conversation queryset.
+
+        The `conversation` query param NARROWS this set — it never selects from
+        outside it. That ordering is the whole point: filtering by the param
+        first and checking membership second is how someone reads a thread they
+        aren't in, and it looks identical in review.
+        """
+        queryset = Message.objects.filter(
+            conversation__in=conversations_for(self.request.user)
+        ).select_related("sender")
+
+        conversation_id = self.request.query_params.get("conversation")
+        if conversation_id:
+            queryset = queryset.filter(
+                conversation_id=self._as_int(conversation_id, "conversation")
+            )
+
+        # Polling: give me only what I haven't seen. An id beats a timestamp —
+        # integer comparison, no clock skew between client and server, and no
+        # timezone parsing to get wrong.
+        after_id = self.request.query_params.get("after_id")
+        if after_id:
+            queryset = queryset.filter(id__gt=self._as_int(after_id, "after_id"))
+
+        return queryset
+
+    @staticmethod
+    def _as_int(value, name):
+        """A junk query param is a client error, not a 500."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValidationError({name: f"Must be an integer, got {value!r}."})
+
+    def perform_create(self, serializer):
+        """A message and its notification land together or not at all.
+
+        Without the transaction, a failure inside notify_new_message would leave
+        a message sitting in a thread that never lit anyone's bell — the kind of
+        bug that only shows up as "they never replied".
+        """
+        with transaction.atomic():
+            message = serializer.save(sender=self.request.user)
+            notify_new_message(message)

@@ -8,6 +8,7 @@ before any view exists.
 from datetime import timedelta
 
 from apps.core.testing import make_listing, make_user
+from apps.notifications.models import Notification
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -265,3 +266,252 @@ class ConversationAPITests(TestCase):
 
     def test_anonymous_callers_are_rejected(self):
         self.assertEqual(APIClient().get("/api/conversations/").status_code, 401)
+
+
+class MessageAPITests(TestCase):
+    def setUp(self):
+        self.lender = make_user("lender")
+        self.borrower = make_user("borrower")
+        self.stranger = make_user("stranger")
+        self.outsider = make_user("outsider")
+
+        self.listing = make_listing(self.lender, "Cordless Drill")
+        self.conversation = Conversation.objects.create(
+            listing=self.listing, initiator=self.borrower
+        )
+
+        # A thread NEITHER of our two participants is in. The listing has to be
+        # owned by someone else too — if `lender` owned it, they'd be its derived
+        # participant and would legitimately see these messages, which would make
+        # every scoping assertion below meaningless.
+        self.other_listing = make_listing(self.stranger, "Folding Ladder")
+        self.other_conversation = Conversation.objects.create(
+            listing=self.other_listing, initiator=self.outsider
+        )
+        self.other_message = Message.objects.create(
+            conversation=self.other_conversation,
+            sender=self.outsider,
+            body="Not your business.",
+        )
+
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.borrower)
+
+    # --- scoping ---
+
+    def test_list_only_returns_messages_from_your_threads(self):
+        Message.objects.create(
+            conversation=self.conversation, sender=self.borrower, body="Mine."
+        )
+
+        response = self.client.get("/api/messages/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row["body"] for row in response.data], ["Mine."])
+
+    def test_the_conversation_param_narrows_it_does_not_grant(self):
+        """The attack this exists to stop: pointing ?conversation= at a thread
+        you aren't in. It must return nothing, not that thread's messages."""
+        response = self.client.get(
+            f"/api/messages/?conversation={self.other_conversation.id}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.data), [])
+
+    def test_the_lender_sees_the_thread_they_are_derived_into(self):
+        Message.objects.create(
+            conversation=self.conversation, sender=self.borrower, body="Hello."
+        )
+        self.client.force_authenticate(user=self.lender)
+
+        response = self.client.get("/api/messages/")
+
+        self.assertEqual([row["body"] for row in response.data], ["Hello."])
+
+    # --- polling ---
+
+    def test_after_id_returns_only_newer_messages(self):
+        first = Message.objects.create(
+            conversation=self.conversation, sender=self.borrower, body="First."
+        )
+        Message.objects.create(
+            conversation=self.conversation, sender=self.lender, body="Second."
+        )
+
+        response = self.client.get(f"/api/messages/?after_id={first.id}")
+
+        self.assertEqual([row["body"] for row in response.data], ["Second."])
+
+    def test_a_junk_after_id_is_a_400_not_a_500(self):
+        response = self.client.get("/api/messages/?after_id=banana")
+
+        self.assertEqual(response.status_code, 400)
+
+    # --- create ---
+
+    def test_sender_comes_from_the_request_not_the_payload(self):
+        response = self.client.post(
+            "/api/messages/",
+            {
+                "conversation": self.conversation.id,
+                "body": "Hello there.",
+                "sender": self.stranger.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            Message.objects.get(pk=response.data["id"]).sender, self.borrower
+        )
+
+    def test_you_cannot_post_into_a_thread_you_are_not_in(self):
+        """Rejected by the field's scoped queryset, with the same error an
+        unknown id gets — so the response reveals nothing."""
+        response = self.client.post(
+            "/api/messages/",
+            {"conversation": self.other_conversation.id, "body": "Butting in."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.other_conversation.messages.count(), 1)
+
+    def test_an_unknown_conversation_is_the_same_400(self):
+        response = self.client.post(
+            "/api/messages/", {"conversation": 999999, "body": "Hi."}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_an_empty_body_is_rejected(self):
+        response = self.client.post(
+            "/api/messages/",
+            {"conversation": self.conversation.id, "body": "   "},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_anonymous_callers_are_rejected(self):
+        self.assertEqual(APIClient().get("/api/messages/").status_code, 401)
+
+
+class MarkReadTests(TestCase):
+    def setUp(self):
+        self.lender = make_user("lender")
+        self.borrower = make_user("borrower")
+        self.listing = make_listing(self.lender, "Cordless Drill")
+        self.conversation = Conversation.objects.create(
+            listing=self.listing, initiator=self.borrower
+        )
+        self.url = f"/api/conversations/{self.conversation.id}/read/"
+
+        self.client = APIClient()
+
+    def send(self, sender, body="Hello."):
+        return Message.objects.create(
+            conversation=self.conversation, sender=sender, body=body
+        )
+
+    def test_the_lender_marking_read_sets_the_lender_column(self):
+        self.client.force_authenticate(user=self.lender)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.conversation.refresh_from_db()
+        self.assertIsNotNone(self.conversation.lender_last_read_at)
+        self.assertIsNone(self.conversation.initiator_last_read_at)
+
+    def test_the_initiator_marking_read_sets_the_initiator_column(self):
+        """The mirror case. Setting the wrong column silently marks the OTHER
+        person's thread read, which no single-sided test would catch."""
+        self.client.force_authenticate(user=self.borrower)
+
+        self.client.post(self.url)
+
+        self.conversation.refresh_from_db()
+        self.assertIsNotNone(self.conversation.initiator_last_read_at)
+        self.assertIsNone(self.conversation.lender_last_read_at)
+
+    def test_marking_read_zeroes_the_unread_count(self):
+        self.send(self.borrower)
+        self.send(self.borrower)
+        self.client.force_authenticate(user=self.lender)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.data["unread_count"], 0)
+
+    def test_marking_read_clears_that_conversations_notifications(self):
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(
+            "/api/messages/",
+            {"conversation": self.conversation.id, "body": "Hi."},
+            format="json",
+        )
+        self.assertEqual(Notification.objects.filter(is_read=False).count(), 1)
+
+        self.client.force_authenticate(user=self.lender)
+        self.client.post(self.url)
+
+        self.assertEqual(Notification.objects.filter(is_read=False).count(), 0)
+
+    def test_reading_one_thread_does_not_clear_another(self):
+        other_listing = make_listing(self.lender, "Folding Ladder")
+        other = Conversation.objects.create(
+            listing=other_listing, initiator=self.borrower
+        )
+        self.client.force_authenticate(user=self.borrower)
+        for conversation in (self.conversation, other):
+            self.client.post(
+                "/api/messages/",
+                {"conversation": conversation.id, "body": "Hi."},
+                format="json",
+            )
+
+        self.client.force_authenticate(user=self.lender)
+        self.client.post(self.url)
+
+        remaining = Notification.objects.filter(is_read=False)
+        self.assertEqual(remaining.count(), 1)
+        self.assertEqual(remaining.get().payload["conversation_id"], other.id)
+
+    def test_reading_lets_the_thread_notify_again(self):
+        """The loop that makes the collapse rule survivable. Without clearing,
+        one unread entry suppresses every future message on the thread."""
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(
+            "/api/messages/",
+            {"conversation": self.conversation.id, "body": "First."},
+            format="json",
+        )
+
+        self.client.force_authenticate(user=self.lender)
+        self.client.post(self.url)
+
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(
+            "/api/messages/",
+            {"conversation": self.conversation.id, "body": "Second."},
+            format="json",
+        )
+
+        self.assertEqual(Notification.objects.count(), 2)
+        self.assertEqual(Notification.objects.filter(is_read=False).count(), 1)
+
+    def test_marking_read_twice_is_harmless(self):
+        self.client.force_authenticate(user=self.lender)
+
+        self.assertEqual(self.client.post(self.url).status_code, 200)
+        self.assertEqual(self.client.post(self.url).status_code, 200)
+
+    def test_a_non_participant_gets_404(self):
+        self.client.force_authenticate(user=make_user("stranger"))
+
+        self.assertEqual(self.client.post(self.url).status_code, 404)
+
+    def test_anonymous_callers_are_rejected(self):
+        self.assertEqual(APIClient().post(self.url).status_code, 401)

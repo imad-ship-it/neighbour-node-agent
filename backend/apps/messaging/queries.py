@@ -70,3 +70,16 @@ def annotated_conversations_for(user):
         )
         .select_related("listing", "listing__lender", "initiator")
     )
+
+
+def last_read_field_for(conversation, user):
+    """Which read-tracking column belongs to `user` on this conversation.
+
+    The initiator is stored; the lender is derived from listing.lender. That
+    asymmetry is why this is a function rather than an inline ternary — it now
+    has two callers and the wrong branch silently marks the OTHER person's
+    thread as read.
+    """
+    if conversation.initiator_id == user.id:
+        return "initiator_last_read_at"
+    return "lender_last_read_at"

@@ -190,7 +190,20 @@ plain field with a default is clearer about where the value comes from.
 **Why.** My Bookmarks renders `ListingCard`. A bare id would force a second round-trip to
 hydrate every row, and the page would render empty and then pop.
 
-> **Messaging.** A thread list nests the other participant and the last message.
+**Nest the smallest serializer the component actually needs.** Nesting the *full*
+`ListingSerializer` drags its annotation-derived fields along, and those do not survive the
+serializer boundary — `is_bookmarked` / `bookmark_id` come from `ListingViewSet.get_queryset`,
+which never ran. On `/saved` that was recoverable because every row is bookmarked by
+definition, so `to_representation` could set both without a query. Anywhere else the honest
+answer needs its own annotation, and a nested full serializer quietly becomes an N+1 or a
+wrong icon.
+
+So: `ListingHeaderSerializer` (id, title, image) for anything that only identifies a listing —
+message threads, notification payloads. Reserve the full serializer for surfaces that render
+a real `ListingCard`.
+
+> **Messaging.** A thread list nests the other participant, the last message, and a listing
+> *header* — deliberately not a card, so there is no bookmark state to restore.
 
 ## 8. Every private-row feature gets these four tests
 

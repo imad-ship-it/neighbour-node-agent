@@ -36,3 +36,17 @@ class ListingSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["lender", "created_at", "updated_at"]
+
+
+class ListingHeaderSerializer(serializers.ModelSerializer):
+    """Just enough to identify a listing: id, title, thumbnail.
+
+    Deliberately NOT ListingSerializer. The full one carries is_bookmarked and
+    bookmark_id, which are produced by ListingViewSet.get_queryset and do not
+    survive being nested somewhere else — they'd serialize as their defaults and
+    render a permanently empty bookmark icon. docs/api-conventions.md rule 7.
+    """
+
+    class Meta:
+        model = Listing
+        fields = ["id", "title", "image"]

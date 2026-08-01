@@ -1499,6 +1499,118 @@ header — wrong and you get a double scrollbar or a composer off the bottom of 
 
 ---
 
+### 60. A well-reasoned decision that reasoned about the wrong thing
+
+**Prompt (review):** the `/auth/me/` fallback has a hole — identity is fetched on the login
+transition, so a reload with a stored token gives an authenticated session with `id: null`,
+and the "message the lender" button then appears on your own listings. Also: don't tune the
+`calc(100vh - 140px)`, delete it.
+
+**Result:** The review was right about the mechanism and, checking it, the reality is worse
+than the diagnosis. `tokenStore` is a module-level variable with no persistence at all, so a
+reload doesn't produce `id: null` — **it logs you out completely.** The scenario named can't
+happen yet; a different and larger demo hazard can.
+
+That distinction mattered enough to check before implementing. The fix is the same either
+way, but it moves from "repair a live bug" to "make the structure correct now so it doesn't
+become one", plus a separate, larger question — should the token persist? — that shouldn't
+be slipped in as part of a bug fix.
+
+**Why the fallback was incomplete is the part worth keeping.** It wasn't careless; it
+reasoned carefully about the wrong axis. The comment I wrote said: *if `/me/` fails the token
+is still good, so keep the session rather than logging the user out.* Every word of that is
+true. But it reasoned about **whether the token is valid**, and the actual question is
+**when identity gets loaded** — and identity was tied to the login *event* rather than to
+the token's existence. A decision can be sound about the thing it considered and still be
+wrong because it considered the wrong thing.
+
+Two changes:
+
+- **Identity follows the token, not the login.** An effect on mount loads `/me/` whenever a
+  token exists. Today that's a no-op, because there's never a token at boot. It costs
+  nothing and it is the only version that stays correct once the token is persisted.
+- **`id: null` now fails closed.** It means "identity unknown", not "not mine", and
+  `MessageLenderButton` hides rather than guessing. Showing it costs a lender a 400 from the
+  self-conversation guard in front of an audience; hiding it costs one unavailable button in
+  a state that shouldn't arise. When the two errors aren't symmetric, pick the quiet one.
+
+**And the CSS constant went, rather than getting tuned.** `height: calc(100vh - 140px)` was
+a guess at the header's height that would break silently the next time the header changed.
+Replaced with a chain that never needs to know: `#root:has(.thread-view)` caps the height —
+scoped, so every other page keeps ordinary document scrolling — then flex does the rest,
+with `min-height: 0` at each level because a flex item otherwise refuses to shrink below its
+content and the overflow never engages. Nothing now knows how tall anything else is. The
+review's framing was the useful bit: a constant that *can* be wrong is worse than a rule
+that can't, even when the constant is currently right.
+
+---
+
+### 61. The three things ninety-nine tests couldn't tell me
+
+**Prompt:** before anything else on Sunday — read `ACCESS_TOKEN_LIFETIME`, settle token
+persistence as a written decision, set up two accounts, then actually click through the
+messaging flow in two browsers.
+
+**Result.** The lifetime is **8 hours**, already raised deliberately from SimpleJWT's
+5-minute default. But the reasoning offered — *if the lifetime is generous, persistence
+matters less* — doesn't hold, and saying so was the useful part. **Expiry and reload are
+independent hazards.** The token died when the JS module unloaded, not when the clock ran
+out, so F5 logged you out with 7 hours 59 minutes left on a perfectly valid credential. A
+long lifetime does nothing about that. Two problems sharing one symptom ("suddenly logged
+out") are still two problems.
+
+**The persistence decision was settled by the test I needed to run, not by security
+reasoning.** Both `sessionStorage` and `localStorage` survive a reload and both are equally
+exposed to XSS — an injected script reads either, and no better than the module variable
+they replace. What separates them is scope: `sessionStorage` is **per-tab**, `localStorage`
+is per-origin. The entire click-through is "be a lender in one tab and a borrower in
+another", and `localStorage` would have had the second login silently replace the first,
+making the verification impossible to perform at all. The requirement that picked the design
+came from testing, not from threat modelling. The production answer — refresh token in an
+httpOnly cookie, short-lived access token in memory — is written into `tokenStore.js` as
+scoped out rather than left as an implied "we know, we know".
+
+**Two failures during the walkthrough that turned out not to be failures**, and both were
+worth the minutes spent proving it:
+
+- **Login refused with "No active account found".** Rather than reading my own recent
+  `AuthContext` changes — which is where suspicion naturally goes after touching auth an
+  hour earlier — I checked the server first: the user existed, was active,
+  `check_password` returned True, and a real HTTP POST to `/api/auth/login/` returned 200
+  with a token pair. That proved the backend, the database, the URL and the credentials
+  were all fine in about ninety seconds, and left only the browser. It was a mistyped
+  password.
+- **The lender's Messages page was empty.** The conversation had been opened against
+  listing 384, owned by a different user entirely, so the lender saw nothing because they
+  genuinely weren't a participant. **The derived-participant scoping was working
+  correctly**, which is exactly what it should look like from outside. The cause turned out
+  to be the second result being clicked rather than the first — the ranker had put the right
+  listing on top.
+
+I had jumped to "the ranking is non-deterministic, so the demo path isn't reproducible",
+which was a plausible story that happened to be wrong. The database told me *which* listing
+the thread was about; it could not tell me *why* that one was chosen, and I filled the gap
+with the more interesting explanation rather than the more likely one. The residual point is
+smaller and duller: several near-identical drills sit within a kilometre of the search
+origin, so clicking the wrong card is easy — under demo pressure, easier still.
+
+**The verification itself.** Three behaviours were unverifiable by the suite and all three
+passed: an optimistic message does not double-render when its polled twin arrives, so the
+sender+body dedupe holds against real polling and not merely against twelve `node`
+assertions; a reply appears in the other tab within ~5s without it being touched, which is
+the only proof `after_id` polling works end to end; and "message the lender" is correctly
+absent on your own listing, which needed `lender_id` and the user's `id` to both survive the
+whole trip. Ninety-nine green tests said the code was internally consistent. They could not
+have told me any of that.
+
+**Fixture gap worth recording:** none of the six seeded users owned zero listings, and none
+had a known password. The borrower must own **nothing**, so that a missing "message the
+lender" button means a bug rather than "oh, that one's mine". `setup_demo_accounts.py`
+creates the pair idempotently, so a half-finished walkthrough can be restarted rather than
+untangled.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1696,3 +1808,37 @@ header — wrong and you get a double scrollbar or a composer off the bottom of 
   make two threads, and why the button needs no knowledge of whether a conversation exists.
   Good constraints compound; that is the argument for deciding them deliberately rather
   than per feature.
+- **Check which axis a decision reasoned about, not just whether its reasoning was sound.**
+  "The token is still valid, so keep the session" was entirely true and still produced a
+  bug, because the question was never token validity — it was *when identity loads*. A
+  justification that survives scrutiny can still be answering a question nobody asked.
+- **Tie state to the thing it depends on, not to the event that first produced it.**
+  Identity depends on having a token, so it must load whenever a token exists. Hanging it
+  off the login transition worked only because nothing yet survived a reload.
+- **When two failure modes aren't symmetric, fail toward the quiet one.** Unknown identity
+  could show the button (a visible 400 in front of an audience) or hide it (one missing
+  button in a state that shouldn't occur). "I can't tell" must never be treated as "no".
+- **A constant that can be wrong is worse than a rule that can't.** `calc(100vh - 140px)`
+  encoded the header's height in a place that would never be updated with it. The fix
+  wasn't a better number — it was an arrangement where no number is needed.
+- **Two hazards sharing one symptom are still two hazards.** "Suddenly logged out" was
+  both token expiry and token loss on reload, and fixing the lifetime addressed only one.
+  When a fix "should have" solved something and didn't, check whether the symptom had a
+  second cause rather than assuming the fix was wrong.
+- **Prove what the server does before debugging the client.** After touching auth an hour
+  earlier, a login failure looked like my bug. Ninety seconds — user exists, `is_active`,
+  `check_password` True, a real HTTP POST returning 200 — eliminated the entire backend and
+  left only the browser. Suspicion naturally lands on whatever you touched most recently,
+  which is exactly why it needs evidence.
+- **Let the test you have to run inform the design.** `sessionStorage` over `localStorage`
+  wasn't chosen on security grounds — they're equivalent there. It was chosen because
+  per-tab scoping is what makes "lender in one tab, borrower in another" possible at all.
+  A design that can't be exercised is a design that won't be verified.
+- **Correct behaviour can look exactly like a bug from outside.** An empty inbox was the
+  scoping working — the user genuinely wasn't a participant. Before debugging, check
+  whether the data actually matches the scenario you think you're testing.
+- **Don't infer a cause the evidence doesn't reach.** The database showed which listing a
+  thread belonged to, and I concluded the ranker had misordered results — a tidy story that
+  explained the symptom and was false. It was a misclick. Evidence that narrows *what*
+  happened rarely establishes *why*, and the interesting explanation is the one to distrust
+  first.

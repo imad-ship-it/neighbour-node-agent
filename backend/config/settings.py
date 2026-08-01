@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -140,6 +141,23 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
+
+# Under the test runner only, hash passwords with something fast.
+#
+# PBKDF2 runs ~600k iterations by design — correct in production, ruinous in a
+# suite whose fixtures create three or four users per test. MD5 is safe here
+# precisely because nothing under test asserts anything about hash strength;
+# tests only need set_password/check_password to round-trip.
+#
+# Guarded on sys.argv rather than a separate settings module: one settings file
+# is easier to keep honest than two that drift.
+#
+# Matches the SUBCOMMAND position specifically, not `"test" in sys.argv` — the
+# looser check would also fire on things like `createsuperuser --username test`
+# and silently weaken a real account's password.
+RUNNING_TESTS = sys.argv[1:2] == ["test"]
+if RUNNING_TESTS:
+    PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 
 # Internationalization

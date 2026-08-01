@@ -68,6 +68,27 @@ def make_listing(lender, title=None, lat=TEST_LAT, lng=TEST_LNG, **overrides):
     return Listing.objects.create(**fields)
 
 
+def make_conversation(listing, initiator, **overrides):
+    """A thread about `listing`, started by `initiator`.
+
+    Note what you CANNOT pass: the other participant. It is derived from
+    `listing.lender`, so the way to control who the second party is, is to
+    choose whose listing it is. That trips people up often enough to be worth
+    saying here rather than in each suite.
+
+    The consequence for fixtures: a conversation meant to be "someone else's"
+    needs a listing owned by someone else too, not merely a different initiator.
+    Sharing an owner silently makes the supposedly-uninvolved user a
+    participant, and an isolation test built on that can't tell a leak from
+    correct behaviour.
+    """
+    from apps.messaging.models import Conversation
+
+    return Conversation.objects.create(
+        listing=listing, initiator=initiator, **overrides
+    )
+
+
 class ScriptedProviderExhausted(AssertionError):
     """The code under test made more calls than the script had responses.
 

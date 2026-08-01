@@ -7,7 +7,7 @@ before any view exists.
 
 from datetime import timedelta
 
-from apps.core.testing import make_listing, make_user
+from apps.core.testing import make_conversation, make_listing, make_user
 from apps.notifications.models import Notification
 from django.test import TestCase
 from django.utils import timezone
@@ -24,9 +24,7 @@ class ConversationScopingTests(TestCase):
         self.stranger = make_user("stranger")
 
         self.listing = make_listing(self.lender, "Cordless Drill")
-        self.conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        self.conversation = make_conversation(self.listing, self.borrower)
 
     def test_the_initiator_sees_the_thread(self):
         self.assertIn(self.conversation, conversations_for(self.borrower))
@@ -65,9 +63,7 @@ class UnreadCountTests(TestCase):
         self.lender = make_user("lender")
         self.borrower = make_user("borrower")
         self.listing = make_listing(self.lender, "Cordless Drill")
-        self.conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        self.conversation = make_conversation(self.listing, self.borrower)
         self.now = timezone.now()
 
     def _message(self, sender, body, minutes):
@@ -154,11 +150,9 @@ class ConversationAPITests(TestCase):
     # --- rule 8.1: scoping ---
 
     def test_list_only_returns_threads_you_are_in(self):
-        mine = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        mine = make_conversation(self.listing, self.borrower)
         other_listing = make_listing(self.lender, "Someone Else's Ladder")
-        Conversation.objects.create(listing=other_listing, initiator=self.stranger)
+        make_conversation(other_listing, self.stranger)
 
         response = self.client.get("/api/conversations/")
 
@@ -166,9 +160,7 @@ class ConversationAPITests(TestCase):
         self.assertEqual([row["id"] for row in response.data], [mine.id])
 
     def test_the_lender_sees_it_too(self):
-        conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        conversation = make_conversation(self.listing, self.borrower)
         self.client.force_authenticate(user=self.lender)
 
         response = self.client.get(f"/api/conversations/{conversation.id}/")
@@ -176,9 +168,7 @@ class ConversationAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_a_non_participant_gets_404_not_403(self):
-        conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        conversation = make_conversation(self.listing, self.borrower)
         self.client.force_authenticate(user=self.stranger)
 
         response = self.client.get(f"/api/conversations/{conversation.id}/")
@@ -247,7 +237,7 @@ class ConversationAPITests(TestCase):
         self.assertEqual(response.data["unread_count"], 0)
 
     def test_the_row_identifies_the_other_participant_not_you(self):
-        Conversation.objects.create(listing=self.listing, initiator=self.borrower)
+        make_conversation(self.listing, self.borrower)
 
         as_borrower = self.client.get("/api/conversations/").data[0]
         self.client.force_authenticate(user=self.lender)
@@ -258,7 +248,7 @@ class ConversationAPITests(TestCase):
 
     def test_the_listing_is_a_header_not_a_card(self):
         """Rule 7: no bookmark fields nested here, so none can render wrong."""
-        Conversation.objects.create(listing=self.listing, initiator=self.borrower)
+        make_conversation(self.listing, self.borrower)
 
         listing = self.client.get("/api/conversations/").data[0]["listing"]
 
@@ -276,18 +266,14 @@ class MessageAPITests(TestCase):
         self.outsider = make_user("outsider")
 
         self.listing = make_listing(self.lender, "Cordless Drill")
-        self.conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        self.conversation = make_conversation(self.listing, self.borrower)
 
         # A thread NEITHER of our two participants is in. The listing has to be
         # owned by someone else too — if `lender` owned it, they'd be its derived
         # participant and would legitimately see these messages, which would make
         # every scoping assertion below meaningless.
         self.other_listing = make_listing(self.stranger, "Folding Ladder")
-        self.other_conversation = Conversation.objects.create(
-            listing=self.other_listing, initiator=self.outsider
-        )
+        self.other_conversation = make_conversation(self.other_listing, self.outsider)
         self.other_message = Message.objects.create(
             conversation=self.other_conversation,
             sender=self.outsider,
@@ -403,9 +389,7 @@ class MarkReadTests(TestCase):
         self.lender = make_user("lender")
         self.borrower = make_user("borrower")
         self.listing = make_listing(self.lender, "Cordless Drill")
-        self.conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        self.conversation = make_conversation(self.listing, self.borrower)
         self.url = f"/api/conversations/{self.conversation.id}/read/"
 
         self.client = APIClient()
@@ -461,9 +445,7 @@ class MarkReadTests(TestCase):
 
     def test_reading_one_thread_does_not_clear_another(self):
         other_listing = make_listing(self.lender, "Folding Ladder")
-        other = Conversation.objects.create(
-            listing=other_listing, initiator=self.borrower
-        )
+        other = make_conversation(other_listing, self.borrower)
         self.client.force_authenticate(user=self.borrower)
         for conversation in (self.conversation, other):
             self.client.post(

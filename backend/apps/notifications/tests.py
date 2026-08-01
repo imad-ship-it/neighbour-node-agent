@@ -7,8 +7,8 @@ works but is never called produces exactly the same passing unit test.
 
 from unittest.mock import patch
 
-from apps.core.testing import make_listing, make_user
-from apps.messaging.models import Conversation, Message
+from apps.core.testing import make_conversation, make_listing, make_user
+from apps.messaging.models import Message
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -20,9 +20,7 @@ class NewMessageNotificationTests(TestCase):
         self.lender = make_user("lender")
         self.borrower = make_user("borrower")
         self.listing = make_listing(self.lender, "Cordless Drill")
-        self.conversation = Conversation.objects.create(
-            listing=self.listing, initiator=self.borrower
-        )
+        self.conversation = make_conversation(self.listing, self.borrower)
 
         self.client = APIClient()
         self.client.force_authenticate(user=self.borrower)
@@ -77,9 +75,7 @@ class NewMessageNotificationTests(TestCase):
     def test_collapse_is_per_conversation(self):
         """Two threads must not silence each other."""
         other_listing = make_listing(self.lender, "Folding Ladder")
-        other = Conversation.objects.create(
-            listing=other_listing, initiator=self.borrower
-        )
+        other = make_conversation(other_listing, self.borrower)
 
         self.send("About the drill.")
         self.client.post(

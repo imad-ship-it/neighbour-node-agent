@@ -19,11 +19,15 @@ function MessageLenderButton({ listingId, lenderId }) {
 
   if (!user) return null
 
-  // `user.id` is null only if /auth/me/ failed at login. Ownership then can't
-  // be determined, so the button is shown rather than hidden — the feature
-  // keeps working for other people's listings, and the server's own 400 is
-  // surfaced below if it turns out to be yours.
-  if (user.id != null && user.id === lenderId) return null
+  // Fail closed on unknown identity.
+  //
+  // `user.id` is null when /auth/me/ failed, which means ownership cannot be
+  // determined — NOT that this isn't mine. Showing the button then means a
+  // lender can click it on their own listing and collect a 400 from the
+  // self-conversation guard: correct server behaviour, terrible in front of an
+  // audience. Hiding it costs one unavailable button in a state that shouldn't
+  // occur; showing it costs a visible error in the state that does.
+  if (user.id == null || user.id === lenderId) return null
 
   return (
     <>

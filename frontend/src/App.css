@@ -623,12 +623,37 @@
 
 /* ---------- message thread ---------- */
 
-.thread-view {
+/* The thread is the one page where the APP owns scrolling rather than the
+   document: the composer stays pinned while the message list scrolls behind it.
+   That needs a definite height somewhere, so the root gets capped — but only
+   while a thread is on screen, so every other page keeps normal document
+   scrolling and long listing grids still work.
+
+   Deliberately no magic constant for the header's height. An earlier version
+   used calc(100vh - 140px), which was a guess that would silently break the
+   moment the header changed. Here nothing needs to know how tall anything else
+   is. */
+#root:has(.thread-view) {
+  height: 100svh;
+}
+
+.site-main:has(.thread-view) {
   display: flex;
   flex-direction: column;
-  /* Fill the viewport below the header so the composer sits at the bottom of
-     the screen rather than the bottom of the message list. */
-  height: calc(100vh - 140px);
+  min-height: 0;
+}
+
+.thread-view {
+  flex: 1;
+  /* Without min-height:0 a flex item refuses to shrink below its content, so
+     the overflow on .message-list below would never engage. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Narrower than .page's 1180px, which it overrides. A conversation is a
+     reading column, not a dashboard — at full page width a long message becomes
+     one 850px line and the eye loses its place returning to the left margin. */
+  max-width: 820px;
 }
 
 .thread-head {
@@ -662,6 +687,7 @@
 
 .message-list {
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -670,7 +696,11 @@
 }
 
 .message {
-  max-width: 72%;
+  /* Capped two ways on purpose. The percentage keeps bubbles from spanning the
+     column on a wide screen; the ch limit keeps the LINE LENGTH readable
+     regardless of how wide the column happens to be. Whichever binds first
+     wins, so this stays sane at any viewport. */
+  max-width: min(75%, 52ch);
   padding: 8px 12px;
   border-radius: 12px 12px 12px 2px;
   background: var(--code-bg);

@@ -126,6 +126,10 @@ class MatchAgentTests(TestCase):
         # join against /api/listings/ could ever produce it.
         self.assertGreater(summary.distance_km, 0)
         self.assertLess(summary.distance_km, 5)
+        # lender_id is what lets a match card hide "message the lender" on your
+        # own listings. Without it the button either can't be shown or is shown
+        # and fails — and nothing else in this suite would notice it vanishing.
+        self.assertEqual(summary.lender_id, self.user.id)
 
     def test_degraded_response_still_carries_listing_detail(self):
         near = self._listing("Cordless Drill", 40.01, -75.01)

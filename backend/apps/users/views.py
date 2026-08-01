@@ -15,6 +15,14 @@ class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        # `id` is here so the client can answer "is this mine?" without a
+        # request per card. Everything else in the API identifies people by id
+        # (Listing.lender, ListingSummary.lender_id), so a client holding only a
+        # username has nothing to compare against.
         return Response(
-            {"username": request.user.username, "email": request.user.email}
+            {
+                "id": request.user.id,
+                "username": request.user.username,
+                "email": request.user.email,
+            }
         )

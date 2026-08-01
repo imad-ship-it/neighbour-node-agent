@@ -67,6 +67,13 @@ class ListingSummary(BaseModel):
     price: Decimal
     distance_km: float
     image: str = Field(default="", description="Stored path, or '' when absent.")
+    lender_id: int = Field(
+        description=(
+            "Who owns it. Present so the client can hide 'message the lender' on "
+            "your own listings — without it a match card cannot tell, and the "
+            "only alternative is a second request per result."
+        )
+    )
 
 
 class MatchResponse(BaseModel):

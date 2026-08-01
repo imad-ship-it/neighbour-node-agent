@@ -315,6 +315,7 @@ def _summarise(matches, candidates):
                 price=listing.price,
                 distance_km=round(distance, 1),
                 image=listing.image.name or "",
+                lender_id=listing.lender_id,
             )
         )
     return summaries

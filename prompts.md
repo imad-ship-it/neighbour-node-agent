@@ -1385,6 +1385,62 @@ correct code in the wrong place. Two of them ran fine and would only have been c
 
 ---
 
+### 58. Ten minutes of tests were one line of settings
+
+**Prompt:** Messaging Block C — write the rule-8 floor tests before the UI, add a
+`make_conversation` helper, and verify each guard by breaking the code.
+
+**Result:** All eight checks the brief listed already existed, written during Block B. Saying
+so was more useful than re-writing them, and it left a real delta: the helper didn't exist,
+and four guards had never actually been proven.
+
+`make_conversation` replaced **14** inline `Conversation.objects.create(...)` sites. Its
+docstring carries the thing that catches people out: you *cannot* pass the second
+participant, because it's derived from `listing.lender`. The way to control who the other
+party is, is to choose whose listing it is — which is exactly why a fixture meant to be
+"someone else's thread" needs a different listing OWNER, not just a different initiator.
+
+**The four guards, broken one at a time:**
+
+| Removed | Result |
+|---|---|
+| the `isnull` branch in `unread_count` | `0 != 2` — a never-opened thread reads as fully read |
+| `get_or_create` → `create` | `IntegrityError: UNIQUE constraint failed` |
+| the self-thread validation | `201 != 400` — a lender messaging themselves |
+| the recipient branch | the sender gets their own bell entry |
+
+The second is the satisfying one: the error names `unique_listing_initiator_conversation`,
+the constraint added back in Block A, proving it is load-bearing rather than decorative and
+that a double-tap without `get_or_create` is a 500, not a duplicate row.
+
+**The find of the day was not a test at all.** The suite had crept to **647 seconds** for 99
+tests, and I'd been assuming that was accumulated volume. It wasn't. `make_user` — my own
+helper from the earlier testing block — creates users with a real password, and Django's
+default PBKDF2 hasher runs **1,200,000 iterations by design**. Three or four users per test
+across fifty tests is hundreds of deliberately-expensive hashes. Overriding
+`PASSWORD_HASHERS` to MD5 under the test runner took the suite to **10 seconds**: a ~65×
+speedup from four lines, none of it touching production.
+
+**Correction, and the part worth remembering:** my first version guarded on
+`if "test" in sys.argv`, which is the idiom you'll find in a hundred blog posts. It is also
+wrong — it matches `test` *anywhere* in the arguments, including
+`createsuperuser --username test`, which would silently store a real account's password as
+MD5. An optimisation whose guard is too loose stops being an optimisation and becomes a
+quiet security downgrade, with no error to notice. Tightened to match the subcommand
+position, `sys.argv[1:2] == ["test"]`, and verified by printing the live hasher outside a
+test run: `pbkdf2_sha256`.
+
+Worth having the one-sentence answer ready, because a panel will ask: the override applies
+only when the subcommand is `test`, production and `runserver` use the real hasher, and
+nothing under test asserts anything about hash strength — tests only need `check_password`
+to round-trip.
+
+The practical consequence is bigger than the number. A 10-second suite can run after every
+part; a 10-minute one gets run at the end of a block, which is precisely how Block B's parts
+became impossible to commit separately.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1554,3 +1610,16 @@ correct code in the wrong place. Two of them ran fine and would only have been c
   participant, changing the initiator isn't enough — the listing owner grants access too.
   My isolation fixture shared an owner, so it failed against correct code and would have
   passed against a leak. A fixture that can't distinguish those two is worse than none.
+- **A slow test suite is usually one expensive thing repeated, not a lot of work.** I'd
+  written off 647 seconds as accumulated volume. It was password hashing — PBKDF2 at 1.2
+  million iterations, several users per test. Measure what the time is actually going into
+  before accepting that a suite is "just big"; the answer is often a single line.
+- **A guard that's too loose turns an optimisation into a vulnerability.**
+  `if "test" in sys.argv` matches `createsuperuser --username test` and would store a real
+  password with a deliberately weak hasher — silently, with no error. When a condition
+  switches off a safety property, match it precisely (`sys.argv[1:2] == ["test"]`) and then
+  go and *print the live value* outside that condition to prove it.
+- **When a brief asks for work already done, say so and deliver the difference.**
+  Re-writing eight tests that already existed would have looked like effort and produced
+  nothing. Mapping them to what was there took minutes and exposed the actual gap: a
+  missing helper and four guards nobody had ever proven.

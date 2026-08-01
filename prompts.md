@@ -1611,6 +1611,71 @@ untangled.
 
 ---
 
+### 62. Reading the rows, not the model
+
+**Prompt:** notifications API — inventory what yesterday's service actually wrote, then a
+scoped list, a separate unread-count endpoint, a serializer with explicit defaults, and an
+idempotent mark-read taking a list of ids.
+
+**Result.** The inventory step earned its ten minutes by answering questions the model
+diagram couldn't. The brief assumed a `recipient` field; the column is **`user`** — and
+since a service has already written rows against it, the serializer had to match reality
+rather than the plan. It also assumed a `kind` discriminator might be missing: `type` exists
+with three choices, of which **only `new_message` has ever been written**. `new_match` and
+`bookmark_update` are declared and dead.
+
+That last fact changed a design decision. A serializer that switches on `type` will
+eventually meet a row written by newer code, so `render_text()` returns a bland fallback
+instead of raising. **A bell that 500s because someone added an enum value is worse than one
+that says "You have a new notification".** Same reasoning for the payload: every lookup has
+a fallback, because `payload` is schemaless and one malformed row shouldn't take down the
+whole dropdown.
+
+**The Day 9 trap reappeared in a new costume**, and this time the demonstration was
+unusually clean. Both routing ids are read straight out of the JSON with
+`source="payload.conversation_id"`. Dropping the `default=None` from one of them produced:
+
+```
+{'id': 1, 'type': 'new_message', 'listing_id': None, 'is_read': False, ...}
+```
+
+`listing_id` kept its default and reports `null`; `conversation_id` is simply **gone** —
+both in the same response, one line of code apart. A schemaless payload makes this far more
+likely than a missing annotation did: any row written before a key existed silently loses
+the field, the client reads `undefined`, the click routes nowhere, and nothing errors
+anywhere.
+
+**Splitting the count from the list was the performance decision, and the test is what
+protects it.** The badge polls every ten seconds, on every page, forever. Reusing the list
+endpoint would ship twenty serialized rows — each with a rendered sentence and a payload —
+so a client can render one digit. `unread_count` is a single `COUNT(*)` with no serializer
+involved, and its response deliberately has **no `results` key**; a test asserts
+`set(payload) == {"unread"}`, which fails the moment anyone folds rows back in. Guarding the
+shape is what stops the optimisation being undone by a well-meaning refactor.
+
+**Three details in `mark_read` that only look fussy until they bite:**
+
+- Someone else's id is **ignored, not rejected** — the update runs against `get_queryset()`,
+  so it matches nothing. A 404 would confirm the row exists.
+- Already-read rows are filtered out *before* the `UPDATE`, so re-sending ids reports
+  `marked: 0`. Idempotent by construction rather than by catching an error.
+- **`bool` is excluded from id coercion.** `True` is an `int` subclass in Python, so `[True]`
+  would have quietly become id `1` and marked a real notification read — invisible from
+  outside, and untraceable from the symptom.
+
+Breaking the scoping — one word, `self.get_queryset()` to `Notification.objects` — failed
+with `1 != 0`: Alice marking Bob's notification read, clearing a badge on an account she
+cannot see. The most damaging thing this endpoint could do, one identifier away.
+
+**Correction, on communication rather than code.** My summary listed those behaviours under
+"Three behaviours worth knowing" and the verification under "The guard, proven", and both
+were read as defect reports needing fixing. They were the opposite — deliberate design, and
+a test proving itself. Describing correct behaviour in the same register as a bug list is a
+writing failure, not a reading one: a section that opens with a broken assertion needs to say
+it was deliberate and already reverted, in the heading.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1842,3 +1907,21 @@ untangled.
   explained the symptom and was false. It was a misclick. Evidence that narrows *what*
   happened rarely establishes *why*, and the interesting explanation is the one to distrust
   first.
+- **Read the rows, not the model.** The field was `user`, not the `recipient` the plan
+  assumed; two of three declared types had never been written. A service that has already
+  populated a table has settled questions the schema only gestures at, and the code being
+  written next has to match what's there.
+- **A schemaless column needs a fallback at every read.** `payload` is JSON, so any row
+  written before a key existed loses that field silently — DRF drops it rather than
+  raising, and the client reads `undefined`. Where a strict column would have failed
+  loudly, JSON just gets quieter.
+- **Protect an optimisation with a test on its shape, not just its speed.** Splitting the
+  unread count out of the list only stays split if something fails when they merge again.
+  Asserting the response has exactly one key does that; asserting it is "fast" would not.
+- **Beware `bool` wherever ids are coerced.** `isinstance(True, int)` is `True` in Python,
+  so `int(True) == 1` and a stray boolean silently addresses row 1. Any `int()` over
+  client-supplied data wants a bool guard.
+- **Describing correct behaviour in the register of a bug list reads as a bug list.**
+  Sections headed "worth knowing" and "the guard, proven" were taken as defects to fix.
+  When a summary mentions a broken assertion, the heading itself has to carry that it was
+  deliberate and already reverted.

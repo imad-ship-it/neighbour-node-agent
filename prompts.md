@@ -1441,6 +1441,64 @@ became impossible to commit separately.
 
 ---
 
+### 59. Three things the frontend needed that the backend didn't have
+
+**Prompt:** Messaging Block D — hooks for conversations, messages and sending; a thread
+list; a thread view with `after_id` polling and optimistic send; mark-read on open; and
+"message the lender" on both listing cards and match results.
+
+**Result:** Reading the code before writing any UI turned up three gaps, all of the same
+kind — the brief assumed things that didn't exist:
+
+1. **`ListingSummary` carried no lender.** "Hide it on your own listings" was impossible for
+   match results, and the only alternative was a request per card.
+2. **`AuthContext` held `{username}` and nothing else.** It assembled that from the login
+   *form* and never asked the server, while everything in the API identifies people by id.
+   The client literally could not answer "is this mine?".
+3. **There is no listing detail page.** Cards aren't clickable, so one of the two entry
+   points the brief named had nowhere to live. Put the button on the card itself.
+
+Same shape as the "shared component library" that turned out not to exist in the screenshots
+block. A brief written from the outside describes the app as it ought to be; the ten minutes
+spent checking is what stops that becoming a 5pm surprise.
+
+**The piece worth the most: `mergeMessages` got its own module, and a real test.** The
+frontend has no test runner, and the polling merge is exactly the code that can't be
+verified by looking at it — optimistic messages have no server id, so when the polled real
+copy arrives there's nothing to match it against and both render. Pulling the pure function
+out of the hook made it testable with plain `node`: 12 assertions, including *"someone else
+saying the same thing does not confirm my pending copy"* and *"the confirmed message keeps
+its SERVER id, not the temp one"*. A file with no dependencies on React is testable whether
+or not the project has a test framework.
+
+The dedupe is a heuristic — sender plus body — and the file says so. Send identical text
+twice in quick succession and the second pending copy vanishes a beat early. The correct fix
+is a client-supplied id echoed back by the API; that is a backend change and it isn't made.
+
+**Two small things that would each have cost an hour to find later:**
+
+- **Optimistic ids are strings on purpose.** `newestServerId` filters to integers, so a
+  pending message can never push the `after_id` cursor forward past real messages that were
+  never fetched — which would silently lose them, and only for the person who just sent
+  something.
+- **The effects key on the newest message id, not the array length.** When an optimistic
+  message is swapped for its real twin the length is *unchanged*, so a length-based effect
+  misses the exact moment a send lands — the scroll and the mark-read would both skip it.
+
+**A decision paid off somewhere I hadn't predicted.** Idempotent create was chosen back in
+bookmarks so a double-tapped bookmark wouldn't error. It's what lets "Message the lender" be
+a single call that neither knows nor cares whether a thread already exists — no "check then
+create", no race, and a double-click can't produce two conversations. Rules chosen for one
+reason keep earning in places the reasoning never mentioned.
+
+**Not verified, and worth saying plainly:** none of this has been seen in a browser. It
+type-checks, builds, and the merge logic is tested, but optimistic send, polling, the badge
+clearing and the match → message path have only been reasoned about. `.thread-view` also
+pins the composer with `height: calc(100vh - 140px)`, where 140 is an estimate of the site
+header — wrong and you get a double scrollbar or a composer off the bottom of the screen.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1623,3 +1681,18 @@ became impossible to commit separately.
   Re-writing eight tests that already existed would have looked like effort and produced
   nothing. Mapping them to what was there took minutes and exposed the actual gap: a
   missing helper and four guards nobody had ever proven.
+- **No test runner is not the same as untestable.** The trickiest frontend logic in the
+  project — merging polled messages against optimistic ones — became twelve assertions run
+  by plain `node`, purely by moving the pure function out of the hook that used it. If a
+  piece of logic is hard to be sure about by reading, that is the argument for extracting
+  it, not for writing a longer comment.
+- **Set a load-bearing default explicitly.** `refetchIntervalInBackground` already defaults
+  to `false`, which is what stops a poll running in a hidden tab. Relying on that means a
+  library upgrade can change behaviour with nothing in the diff to review. Write down the
+  values you are depending on, especially the ones you agree with.
+- **A rule chosen for one reason keeps earning in places the reasoning never mentioned.**
+  Idempotent create existed so a double-tapped bookmark wouldn't 400. It is also why
+  "message the lender" is one call instead of check-then-create, why a double-click can't
+  make two threads, and why the button needs no knowledge of whether a conversation exists.
+  Good constraints compound; that is the argument for deciding them deliberately rather
+  than per feature.

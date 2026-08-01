@@ -528,3 +528,197 @@
     display: none;
   }
 }
+
+/* ---------- messaging ---------- */
+
+.thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.thread-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.thread-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.thread-row:hover {
+  background: var(--social-bg);
+}
+
+.thread-media {
+  flex: 0 0 48px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--code-bg);
+}
+
+.thread-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thread-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* min-width:0 lets the preview below actually truncate — without it the flex
+   item refuses to shrink past its content and the ellipsis never appears. */
+.thread-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-title {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.thread-preview {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-meta {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.thread-badge {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* ---------- message thread ---------- */
+
+.thread-view {
+  display: flex;
+  flex-direction: column;
+  /* Fill the viewport below the header so the composer sits at the bottom of
+     the screen rather than the bottom of the message list. */
+  height: calc(100vh - 140px);
+}
+
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-back {
+  font-size: 20px;
+  line-height: 1;
+  text-decoration: none;
+  color: var(--text);
+  padding: 4px 8px;
+}
+
+.thread-head img {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.thread-head-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.message-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 2px;
+}
+
+.message {
+  max-width: 72%;
+  padding: 8px 12px;
+  border-radius: 12px 12px 12px 2px;
+  background: var(--code-bg);
+  align-self: flex-start;
+}
+
+/* Mine sit right and carry the accent, so the thread is readable at a glance
+   without needing to parse names on every row. */
+.message-mine {
+  align-self: flex-end;
+  background: var(--accent-bg);
+  border-radius: 12px 12px 2px 12px;
+}
+
+.message-pending {
+  opacity: 0.6;
+}
+
+.message-body {
+  margin: 0;
+  color: var(--text-h);
+  overflow-wrap: anywhere;
+}
+
+.message-time {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.message-form {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.message-form input {
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.message-form input:focus {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}

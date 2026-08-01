@@ -22,6 +22,7 @@ function Layout({ children }) {
                   lead to a prompt. The route still handles that case for anyone
                   arriving by URL. */}
               <NavLink to="/saved">Saved</NavLink>
+              <NavLink to="/messages">Messages</NavLink>
               <span className="who">{user.username}</span>
               <button className="btn btn-ghost" onClick={logout}>
                 Log out

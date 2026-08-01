@@ -12,7 +12,22 @@ export function AuthProvider({ children }) {
     const { data } = await client.post('/auth/login/', { username, password })
     setToken(data.access)
     setAccessToken(data.access)
-    setUser({ username })
+
+    // Fetch the profile rather than assembling it from the form. The login
+    // response is a token pair and carries no identity, and the app needs the
+    // user's ID — "is this listing mine?" compares against Listing.lender and
+    // ListingSummary.lender_id, both of which are ids. A username can't answer
+    // that question.
+    //
+    // If /me/ fails the token is still good, so fall back to the username we
+    // already know rather than logging the user back out. The only thing lost
+    // is the ability to recognise their own listings.
+    try {
+      const { data: profile } = await client.get('/auth/me/')
+      setUser(profile)
+    } catch {
+      setUser({ id: null, username })
+    }
   }
 
   async function register(username, email, password) {

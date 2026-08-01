@@ -1,6 +1,7 @@
 import { useAuth } from '../context/AuthContext'
 import { useBookmarkToggle } from '../hooks/useBookmarkToggle'
 import Icon from './Icon'
+import MessageLenderButton from './MessageLenderButton'
 
 // Backend values are snake_case enums ("sporting_goods", "like_new").
 function label(value) {
@@ -53,6 +54,8 @@ function ListingCard({ listing }) {
           ${listing.price}
           <span> / day</span>
         </p>
+
+        <MessageLenderButton listingId={listing.id} lenderId={listing.lender} />
       </div>
     </article>
   )

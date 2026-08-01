@@ -1,5 +1,6 @@
 import { mediaUrl } from '../api/client'
 import MatchExplanation from './MatchExplanation'
+import MessageLenderButton from './MessageLenderButton'
 
 // Backend values are snake_case enums ("sporting_goods", "like_new").
 function label(value) {
@@ -76,6 +77,11 @@ function MatchCard({ match, listing }) {
             ))}
           </ul>
         )}
+
+        {/* Where the agent's output becomes something you can act on. Everything
+            upstream — retrieval, trust flags, ranking — exists so this button
+            is worth pressing. */}
+        <MessageLenderButton listingId={listing.id} lenderId={listing.lender_id} />
       </div>
     </article>
   )

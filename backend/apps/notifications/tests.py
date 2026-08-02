@@ -5,6 +5,7 @@ directly, because the thing most likely to break is the wiring — a service tha
 works but is never called produces exactly the same passing unit test.
 """
 
+from datetime import timedelta
 from unittest.mock import patch
 
 from apps.core.testing import make_conversation, make_listing, make_user
@@ -12,9 +13,15 @@ from apps.messaging.models import Message
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import Notification
+from .services import (
+    MATCH_NOTIFICATION_CAP,
+    MATCH_NOTIFICATION_WINDOW,
+    notify_listings_matched,
+)
 
 
 class NewMessageNotificationTests(TestCase):
@@ -435,4 +442,152 @@ class MarkReadTests(TestCase):
             .post("/api/notifications/mark_read/", {"ids": []}, format="json")
             .status_code,
             401,
+        )
+
+
+class MatchNotificationTests(TestCase):
+    """The second trigger: a listing ranking into someone else's search.
+
+    Lender-side by design. The searcher is already looking at their results, so
+    the value is telling the OWNER that their item matched a nearby request.
+    This logic exists nowhere else in the project, so these are the tests that
+    matter most in this app.
+    """
+
+    def setUp(self):
+        self.searcher = make_user("searcher")
+        self.alice = make_user("alice")
+        self.bob = make_user("bob")
+
+    def listing_for(self, owner, title):
+        return make_listing(owner, title)
+
+    def match_notifications(self, user=None):
+        rows = Notification.objects.filter(type=Notification.NotificationType.NEW_MATCH)
+        return rows.filter(user=user) if user else rows
+
+    def test_owners_of_ranked_listings_are_notified(self):
+        drill = self.listing_for(self.alice, "Cordless Drill")
+        ladder = self.listing_for(self.bob, "Folding Ladder")
+
+        notify_listings_matched([drill, ladder], self.searcher)
+
+        self.assertEqual(self.match_notifications().count(), 2)
+        self.assertEqual(self.match_notifications(self.alice).count(), 1)
+        self.assertEqual(self.match_notifications(self.bob).count(), 1)
+
+    def test_the_searcher_is_never_notified_about_their_own_listing(self):
+        """Guard 1. Searching for something like your own item is common — the
+        seed data is full of near-duplicates — so this fires often."""
+        mine = self.listing_for(self.searcher, "My Own Drill")
+        theirs = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([mine, theirs], self.searcher)
+
+        self.assertEqual(self.match_notifications().count(), 1)
+        self.assertEqual(self.match_notifications().get().user, self.alice)
+
+    def test_only_the_top_few_ranked_listings_notify(self):
+        """Guard 2. The whole candidate set would light a dozen bells for
+        listings nobody actually looked at."""
+        listings = [
+            self.listing_for(make_user(f"owner{i}"), f"Item {i}") for i in range(6)
+        ]
+
+        notify_listings_matched(listings, self.searcher)
+
+        self.assertEqual(self.match_notifications().count(), MATCH_NOTIFICATION_CAP)
+
+    def test_two_searches_in_a_row_produce_one_notification(self):
+        """Guard 3, the collapse rule. Demo searches repeat the same query
+        minutes apart; without this a lender's bell reads 20 by lunchtime."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([drill], self.searcher)
+        notify_listings_matched([drill], self.searcher)
+
+        self.assertEqual(self.match_notifications(self.alice).count(), 1)
+
+    def test_collapse_is_per_listing_not_per_owner(self):
+        """One owner with two matching listings should hear about both."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+        ladder = self.listing_for(self.alice, "Folding Ladder")
+
+        notify_listings_matched([drill], self.searcher)
+        notify_listings_matched([ladder], self.searcher)
+
+        self.assertEqual(self.match_notifications(self.alice).count(), 2)
+
+    def test_a_read_notification_no_longer_suppresses(self):
+        """Collapse applies to UNREAD rows only — same rule as messages. Once
+        the lender has seen it, a later match is news again."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([drill], self.searcher)
+        Notification.objects.update(is_read=True)
+        notify_listings_matched([drill], self.searcher)
+
+        self.assertEqual(self.match_notifications(self.alice).count(), 2)
+
+    def test_an_old_notification_no_longer_suppresses(self):
+        """The window is time-bounded, so a match next week is not silenced by
+        one from today."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([drill], self.searcher)
+        Notification.objects.update(
+            created_at=timezone.now() - MATCH_NOTIFICATION_WINDOW - timedelta(minutes=1)
+        )
+        notify_listings_matched([drill], self.searcher)
+
+        self.assertEqual(self.match_notifications(self.alice).count(), 2)
+
+    def test_no_searcher_means_no_notifications(self):
+        """rank_candidates stays side-effect free when called without a request,
+        which is what keeps the service-level match tests honest."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([drill], None)
+
+        self.assertEqual(self.match_notifications().count(), 0)
+
+    def test_the_payload_routes_to_a_listing_not_a_thread(self):
+        drill = self.listing_for(self.alice, "Cordless Drill")
+
+        notify_listings_matched([drill], self.searcher)
+
+        payload = self.match_notifications().get().payload
+        self.assertEqual(payload["listing_id"], drill.id)
+        self.assertEqual(payload["listing_title"], "Cordless Drill")
+        self.assertNotIn("conversation_id", payload)
+
+    def test_the_rendered_sentence_addresses_the_owner(self):
+        """Lender-side wording. "New matches for your search" would be the
+        borrower's sentence and is the wrong one for this trigger."""
+        drill = self.listing_for(self.alice, "Cordless Drill")
+        notify_listings_matched([drill], self.searcher)
+
+        client = APIClient()
+        client.force_authenticate(user=self.alice)
+        row = client.get("/api/notifications/").data["results"][0]
+
+        self.assertEqual(row["text"], "Cordless Drill matched a nearby request")
+        self.assertIsNone(row["conversation_id"])
+        self.assertEqual(row["listing_id"], drill.id)
+
+    def test_collapse_costs_one_query_regardless_of_batch_size(self):
+        """This runs inside the match request, whose latency is watched live."""
+        one = [self.listing_for(self.alice, "Only Item")]
+        many = [self.listing_for(make_user(f"owner{i}"), f"Item {i}") for i in range(3)]
+
+        with CaptureQueriesContext(connection) as small:
+            notify_listings_matched(one, self.searcher)
+        with CaptureQueriesContext(connection) as large:
+            notify_listings_matched(many, self.searcher)
+
+        self.assertEqual(
+            len(large),
+            len(small),
+            f"{len(small)} queries for one listing but {len(large)} for three — "
+            "the collapse check is running per listing instead of per batch.",
         )

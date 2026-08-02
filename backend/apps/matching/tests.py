@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from apps.core.models import TraceLog
 from apps.core.testing import make_listing, make_user, scripted_provider
+from apps.notifications.models import Notification
 from django.test import TestCase
 
 from .services import rank_candidates, retrieve_candidates, understand_query
@@ -214,6 +215,51 @@ class MatchAgentTests(TestCase):
         rank_prompt = provider.prompts[0]
         self.assertIn("thin_description", rank_prompt)
         self.assertIn(f"id={flagged.id}", rank_prompt)
+
+    def test_a_ranked_listing_notifies_its_owner(self):
+        """The WIRING, not the notification logic.
+
+        apps/notifications/tests.py already proves notify_listings_matched
+        behaves — the guards, the collapse, the cap. None of that would notice
+        if the call were removed from rank_candidates, which is precisely the
+        "service works but is never called" failure. This test fails if the seam
+        breaks, and only if the seam breaks.
+        """
+        lender = make_user("some-lender")
+        listing = make_listing(lender, "Cordless Drill", 40.01, -75.01)
+        searcher = make_user("searcher")
+        run_id = uuid4().hex
+
+        with scripted_provider(
+            "apps.matching.services", QUERY_JSON, rank_json(listing.id)
+        ):
+            query = understand_query("cordless drill", run_id=run_id)
+            candidates, _ = retrieve_candidates(query, LAT, LNG, run_id=run_id)
+            rank_candidates(
+                query, candidates, run_id=run_id, step_index=3, searcher=searcher
+            )
+
+        notification = Notification.objects.get(
+            type=Notification.NotificationType.NEW_MATCH
+        )
+        self.assertEqual(notification.user, lender)
+        self.assertEqual(notification.payload["listing_id"], listing.id)
+
+    def test_ranking_without_a_searcher_notifies_nobody(self):
+        """Every other test in this class calls rank_candidates without a
+        searcher. If that started writing notifications, this suite would be
+        silently creating rows as a side effect of testing something else."""
+        listing = self._listing("Cordless Drill", 40.01, -75.01)
+        run_id = uuid4().hex
+
+        with scripted_provider(
+            "apps.matching.services", QUERY_JSON, rank_json(listing.id)
+        ):
+            query = understand_query("cordless drill", run_id=run_id)
+            candidates, _ = retrieve_candidates(query, LAT, LNG, run_id=run_id)
+            rank_candidates(query, candidates, run_id=run_id, step_index=3)
+
+        self.assertEqual(Notification.objects.count(), 0)
 
 
 class TrustRuleTests(TestCase):

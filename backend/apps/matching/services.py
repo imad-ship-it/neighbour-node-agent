@@ -8,6 +8,7 @@ from apps.core.services.llm import get_provider
 from apps.core.services.tracing import trace_call
 from apps.core.services.validation import LLMValidationError, generate_and_validate
 from apps.listings.models import Listing
+from apps.notifications.services import notify_listings_matched
 from django.utils import timezone
 
 from .models import MatchSession
@@ -321,11 +322,36 @@ def _summarise(matches, candidates):
     return summaries
 
 
-def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None):
+def _notify_owners(matches, candidates, searcher):
+    """Tell the owners of the ranked listings, best first.
+
+    Called on both the ranked and the degraded path: a degraded search still
+    returned real nearby listings, and their owners have the same reason to
+    hear about it.
+
+    `searcher` defaults to None at the call sites that don't have a user (the
+    service-level tests), which turns this into a no-op rather than forcing
+    every caller to care.
+    """
+    if searcher is None or not matches:
+        return
+
+    by_id = {listing.id: listing for listing, _, _ in candidates}
+    ranked = [by_id[m.listing_id] for m in matches if m.listing_id in by_id]
+    notify_listings_matched(ranked, searcher)
+
+
+def rank_candidates(
+    query, candidates, *, run_id="", step_index=2, override=None, searcher=None
+):
     """LLM call #2: score and explain the retrieved candidates.
 
     Degrades to distance-only ordering rather than failing the whole search —
     a worse ranking is more useful to the user than an error page.
+
+    `searcher` is optional so that ranking stays callable without a request:
+    pass it and the owners of ranked listings get a notification, omit it and
+    nothing is written.
     """
     if not candidates:
         return MatchResponse(matches=[], candidate_count=0, run_id=run_id)
@@ -373,6 +399,7 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
             )
             for i, (listing, distance, report) in enumerate(candidates, start=1)
         ]
+        _notify_owners(degraded_matches, candidates, searcher)
         return MatchResponse(
             matches=degraded_matches,
             listings=_summarise(degraded_matches, candidates),
@@ -383,6 +410,7 @@ def rank_candidates(query, candidates, *, run_id="", step_index=2, override=None
 
     # The model can invent an id — drop anything that wasn't actually retrieved.
     matches = [m for m in result.matches if m.listing_id in valid_ids]
+    _notify_owners(matches, candidates, searcher)
     return MatchResponse(
         matches=matches,
         listings=_summarise(matches, candidates),

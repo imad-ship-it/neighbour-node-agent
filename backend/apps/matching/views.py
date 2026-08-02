@@ -58,7 +58,13 @@ class MatchView(APIView):
         candidates, widened = retrieve_candidates(
             query, lat, lng, run_id=run_id, step_index=1
         )
-        result = rank_candidates(query, candidates, run_id=run_id, step_index=3)
+        # `searcher` is what turns on the lender-side match notification: the
+        # owners of ranked listings hear that their item matched a nearby
+        # request. Passed here rather than defaulted in the service so that
+        # calling rank_candidates without a request stays side-effect free.
+        result = rank_candidates(
+            query, candidates, run_id=run_id, step_index=3, searcher=request.user
+        )
         result.refined = prior is not None
         result.widened = widened
         return Response(result.model_dump(mode="json"), status=status.HTTP_200_OK)

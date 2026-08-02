@@ -11,7 +11,22 @@ message-create path wraps this in transaction.atomic: forgetting is a bug, but
 a half-applied write is a worse one.
 """
 
+from datetime import timedelta
+
+from django.db import transaction
+from django.utils import timezone
+
 from .models import Notification
+
+# How many of the ranked results notify their owners. The whole candidate set
+# would mean a single search lighting a dozen bells, most for listings nobody
+# actually looked at — the signal is "yours ranked", not "yours was retrieved".
+MATCH_NOTIFICATION_CAP = 3
+
+# Within this window an unread match notification for the same (owner, listing)
+# suppresses another. Demo-shaped searches repeat the same query minutes apart;
+# without this a lender's bell reads "20" by lunchtime and means nothing.
+MATCH_NOTIFICATION_WINDOW = timedelta(hours=6)
 
 
 def notify_new_message(message):
@@ -77,3 +92,61 @@ def clear_message_notifications(user, conversation_id):
         is_read=False,
         payload__conversation_id=conversation_id,
     ).update(is_read=True)
+
+
+def notify_listings_matched(listings, searcher):
+    """Tell lenders their item was ranked into someone's search.
+
+    The direction is the decision worth explaining. Notifying the SEARCHER is
+    pointless — they are looking at the results. The value is on the lender's
+    side: "your drill matched a request 1km away" is marketplace behaviour a
+    lender would act on, and it needs no saved-search feature to exist.
+
+    `listings` arrives already ranked, best first. Returns the rows created,
+    which may be fewer than asked for, or none.
+    """
+    if searcher is None:
+        return []
+
+    # Guard 1: never notify someone about their own search.
+    mine_first = [listing for listing in listings if listing.lender_id != searcher.id][
+        :MATCH_NOTIFICATION_CAP
+    ]  # Guard 2: only the top few, not the candidate set.
+    if not mine_first:
+        return []
+
+    # Guard 3: collapse. One SELECT covering every owner in the batch, rather
+    # than one per listing — this runs inside a request the panel will be
+    # watching the latency of.
+    since = timezone.now() - MATCH_NOTIFICATION_WINDOW
+    recent = Notification.objects.filter(
+        type=Notification.NotificationType.NEW_MATCH,
+        is_read=False,
+        created_at__gte=since,
+        user_id__in={listing.lender_id for listing in mine_first},
+    ).values_list("user_id", "payload")
+    already_told = {(user_id, payload.get("listing_id")) for user_id, payload in recent}
+
+    rows = [
+        Notification(
+            user_id=listing.lender_id,
+            type=Notification.NotificationType.NEW_MATCH,
+            payload={
+                # No conversation_id: a match notification routes to the
+                # listing, not to a thread. The serializer's default keeps the
+                # key present as null so the client can branch on it.
+                "listing_id": listing.id,
+                "listing_title": listing.title,
+            },
+        )
+        for listing in mine_first
+        if (listing.lender_id, listing.id) not in already_told
+    ]
+    if not rows:
+        return []
+
+    # Atomic so a partial batch can't survive a failure halfway through — half
+    # the lenders notified is worse than none, because the collapse guard would
+    # then suppress the retry for the ones that did land.
+    with transaction.atomic():
+        return Notification.objects.bulk_create(rows)

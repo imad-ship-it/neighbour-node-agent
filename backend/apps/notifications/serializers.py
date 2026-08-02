@@ -22,7 +22,11 @@ def render_text(notification):
         return f"{sender} messaged you about {listing}"
 
     if notification.type == Notification.NotificationType.NEW_MATCH:
-        return "New matches for your search"
+        # Lender-side, not searcher-side. The person being told is the OWNER of
+        # a listing that ranked into someone else's search — telling searchers
+        # about their own results would be pointless, they're looking at them.
+        listing = payload.get("listing_title") or "One of your listings"
+        return f"{listing} matched a nearby request"
 
     if notification.type == Notification.NotificationType.BOOKMARK_UPDATE:
         listing = payload.get("listing_title") or "a listing you saved"

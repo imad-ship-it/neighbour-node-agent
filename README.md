@@ -61,21 +61,33 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 
 ```mermaid
 flowchart TD
-    UI["React 19 + Vite<br/>Listings · CreateListingForm"] -->|"axios + JWT"| API["Django REST Framework<br/>/api/auth/ · /api/listings/ · /api/match/"]
+    UI["React 19 + Vite<br/>browse · match · saved · messages · bell"] -->|"axios + JWT"| API["Django REST Framework<br/>auth · listings · match · bookmarks<br/>conversations · messages · notifications"]
     MCPC["MCP client<br/>Claude Code · Cursor"] -->|"stdio JSON-RPC"| MCPS["mcp_server.py<br/>geo_search · trust_check · listing://"]
+
     API --> EXT["listings/services.py<br/>extract_listing_from_image()"]
     API --> MATCH["matching/services.py<br/>understand → retrieve → trust → rank"]
+    API --> MSG["messaging/<br/>participant-scoped threads<br/>per-role unread counts"]
+
     EXT --> REG["core/services/llm<br/>get_provider(role, override)"]
     MATCH --> REG
     REG -->|"EXTRACTION_PROVIDER"| CLAUDE["Anthropic Claude<br/>vision extraction"]
     REG -->|"MATCHING_PROVIDER"| DS["DeepSeek<br/>structured matching"]
     REG -->|"default"| STUB["StubLLMProvider<br/>no API key"]
+
     MATCH -.->|"tool call"| GEO["geo_search<br/>haversine + radius"]
     MATCH -.->|"tool call"| TRUST["trust_check<br/>deterministic rules"]
     MCPS -.-> GEO
     MCPS -.-> TRUST
-    GEO --> DB[("SQLite")]
+
+    MSG ==>|"message sent<br/>(same transaction)"| NOTIF["notifications/services.py<br/>collapse · cap · self-guard"]
+    MATCH ==>|"listing ranked<br/>notifies its owner"| NOTIF
+    NOTIF --> COUNT["/notifications/unread_count/<br/>polled by the bell, ~10s"]
+
+    GEO --> DB[("SQLite<br/>WAL · single writer")]
     TRUST --> DB
+    MSG --> DB
+    NOTIF --> DB
+
     EXT --> TRACE["TraceLog"]
     MATCH --> TRACE
     MCPS --> TRACE
@@ -318,6 +330,15 @@ shape of the code around it.
 | `DELETE` | `/api/bookmarks/{id}/` | JWT | Un-save. Someone else's bookmark 404s, never 403s |
 | `POST` | `/api/listings/extract/` | JWT | Photo → draft listing (multipart `image`, optional `description`) |
 | `POST` | `/api/match/` | JWT | Free text + `lat`/`lng` → ranked matches with explanations. Pass `fresh: true` to ignore session memory |
+| `GET`  | `/api/conversations/` | JWT | Your threads, each with `unread_count`, last message and a listing header |
+| `POST` | `/api/conversations/` | JWT | Open a thread (`{"listing": id}`). Idempotent — 201 on create, 200 if it exists. Self-threads 400 |
+| `GET`  | `/api/conversations/{id}/` | JWT | One thread. A thread you aren't in 404s |
+| `POST` | `/api/conversations/{id}/read/` | JWT | Mark read to now, stamping the column for *your* role. Clears that thread's notifications |
+| `GET`  | `/api/messages/?conversation=&after_id=` | JWT | Messages in your threads. `conversation` narrows, it never grants; `after_id` is the polling cursor |
+| `POST` | `/api/messages/` | JWT | Send (`conversation` + `body`). Sender from the token; notification written in the same transaction |
+| `GET`  | `/api/notifications/` | JWT | Bell rows, paginated. Server-rendered sentence plus the ids to route on |
+| `GET`  | `/api/notifications/unread_count/` | JWT | `{"unread": n}` and nothing else — the badge polls this, not the list |
+| `POST` | `/api/notifications/mark_read/` | JWT | `{"ids": [...]}` → `{"marked": n, "unread": n}`. Scoped, idempotent |
 
 Authenticated requests use `Authorization: Bearer <access-token>`.
 

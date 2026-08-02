@@ -61,34 +61,74 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 
 ```mermaid
 flowchart TD
-    UI["React 19 + Vite<br/>browse · match · saved · messages · bell"] -->|"axios + JWT"| API["Django REST Framework<br/>auth · listings · match · bookmarks<br/>conversations · messages · notifications"]
-    MCPC["MCP client<br/>Claude Code · Cursor"] -->|"stdio JSON-RPC"| MCPS["mcp_server.py<br/>geo_search · trust_check · listing://"]
+    subgraph clients ["Clients"]
+        direction LR
+        UI["React 19 + Vite<br/>browse · match · saved<br/>messages · bell"]
+        MCPC["MCP client<br/>Claude Code · Cursor"]
+    end
 
-    API --> EXT["listings/services.py<br/>extract_listing_from_image()"]
-    API --> MATCH["matching/services.py<br/>understand → retrieve → trust → rank"]
-    API --> MSG["messaging/<br/>participant-scoped threads<br/>per-role unread counts"]
+    subgraph entry ["Entry points"]
+        direction LR
+        API["Django REST Framework<br/>auth · listings · match · bookmarks<br/>conversations · messages · notifications"]
+        MCPS["mcp_server.py<br/>stdio JSON-RPC"]
+    end
 
-    EXT --> REG["core/services/llm<br/>get_provider(role, override)"]
+    subgraph svc ["Service layer"]
+        direction LR
+        EXT["listings<br/>extract_listing_from_image()"]
+        MATCH["matching<br/>understand → retrieve<br/>→ trust → rank"]
+        MSG["messaging<br/>participant-scoped threads<br/>per-role unread counts"]
+        NOTIF["notifications<br/>collapse · cap · self-guard"]
+    end
+
+    subgraph shared ["Deterministic tools — one implementation, two callers"]
+        direction LR
+        GEO["geo_search<br/>haversine + radius"]
+        TRUST["trust_check<br/>rule-based flags"]
+    end
+
+    subgraph llm ["LLM providers — resolved per role"]
+        direction LR
+        REG["get_provider(role, override)"]
+        CLAUDE["Anthropic Claude<br/>vision"]
+        DS["DeepSeek<br/>structured"]
+        STUB["Stub<br/>no API key"]
+    end
+
+    subgraph store ["Storage"]
+        direction LR
+        DB[("SQLite<br/>WAL · single writer")]
+        TRACE[("TraceLog<br/>every step, every tool call")]
+    end
+
+    UI -->|"axios + JWT"| API
+    MCPC -->|"stdio"| MCPS
+
+    API --> EXT
+    API --> MATCH
+    API --> MSG
+    API --> NOTIF
+
+    EXT --> REG
     MATCH --> REG
-    REG -->|"EXTRACTION_PROVIDER"| CLAUDE["Anthropic Claude<br/>vision extraction"]
-    REG -->|"MATCHING_PROVIDER"| DS["DeepSeek<br/>structured matching"]
-    REG -->|"default"| STUB["StubLLMProvider<br/>no API key"]
+    REG -->|"EXTRACTION_PROVIDER"| CLAUDE
+    REG -->|"MATCHING_PROVIDER"| DS
+    REG -->|"fallback"| STUB
 
-    MATCH -.->|"tool call"| GEO["geo_search<br/>haversine + radius"]
-    MATCH -.->|"tool call"| TRUST["trust_check<br/>deterministic rules"]
+    MATCH -.-> GEO
+    MATCH -.-> TRUST
     MCPS -.-> GEO
     MCPS -.-> TRUST
 
-    MSG ==>|"message sent<br/>(same transaction)"| NOTIF["notifications/services.py<br/>collapse · cap · self-guard"]
-    MATCH ==>|"listing ranked<br/>notifies its owner"| NOTIF
-    NOTIF --> COUNT["/notifications/unread_count/<br/>polled by the bell, ~10s"]
+    MSG ==>|"message sent"| NOTIF
+    MATCH ==>|"listing ranked"| NOTIF
 
-    GEO --> DB[("SQLite<br/>WAL · single writer")]
+    GEO --> DB
     TRUST --> DB
     MSG --> DB
     NOTIF --> DB
 
-    EXT --> TRACE["TraceLog"]
+    EXT --> TRACE
     MATCH --> TRACE
     MCPS --> TRACE
 ```

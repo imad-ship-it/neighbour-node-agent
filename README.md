@@ -425,6 +425,29 @@ python manage.py seed_data --count 100    # custom volume
 Column names and types are verified after each migration with a SQLite browser
 (DB Browser for SQLite / DBeaver).
 
+### SQLite in production too
+
+The deployed container runs **SQLite, not Postgres** — deliberately, for a
+single-node deployment:
+
+- **One node, one worker process.** No multi-process write contention.
+- **Database on a mounted volume**, so it survives container replacement.
+- **WAL journal mode enabled**, which is what makes concurrent reads during a
+  write safe.
+
+At this scale — one writer, a few dozen listings — SQLite is not a compromise.
+Two things would have to change before scaling out, and both are identified
+rather than assumed:
+
+1. The notification collapse filter uses a JSONField key lookup that compiles to
+   SQLite's `json_extract()`; Postgres uses `jsonb` operators with slightly
+   different semantics.
+2. Extraction results are cached in `LocMemCache`, which is **per-process**. A
+   second worker halves the hit rate, and every miss is a paid vision call.
+
+The reasoning, the migration path and what was tested to protect it are in
+[docs/decisions.md](docs/decisions.md).
+
 ---
 
 ## Development notes
@@ -442,10 +465,12 @@ Column names and types are verified after each migration with a SQLite browser
   the built-out version of that same join-row shape, and
   [docs/api-conventions.md](docs/api-conventions.md) is the checklist those two should
   follow.
-- Test coverage is 49 tests: extraction, caching, the match agent and the four trust rules
-  at service level; the bookmarks API, listing annotations and object permissions at HTTP
-  level. **The MCP tools are still untested** — `mcp_client_demo.py` exercises them by hand
-  but nothing asserts on them in CI. Coverage isn't measured.
+- Test coverage is **169 backend tests and 16 frontend**, measured with branch coverage:
+  **76% overall, 91% on product code** excluding the demo scripts, seed command and MCP
+  demo client. Composition, the known gaps and what coverage does *not* measure are in
+  [docs/testing.md](docs/testing.md). The main remaining gaps are the two provider
+  `generate()` methods, which need SDK mocking, and frontend rendering — pure logic is
+  tested, anything needing a DOM is deliberately out of scope.
 - Real geolocation. The match UI searches from a fixed point matching the seeded data,
   because browser geolocation would put a user nowhere near it.
 - Persistent result cache. `LocMemCache` dies with the process, so the 24h extraction

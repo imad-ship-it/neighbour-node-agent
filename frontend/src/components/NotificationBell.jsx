@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { iconFor, routeFor } from '../hooks/notificationKinds'
 import {
   useMarkNotificationsRead,
   useNotifications,
@@ -9,30 +10,6 @@ import {
 import { timeAgo } from '../utils/time'
 import EmptyState from './EmptyState'
 import Icon from './Icon'
-
-/**
- * How each kind renders and where it goes.
- *
- * Note what ISN'T here: the sentence. The server renders `text`, so the wording
- * lives in one place instead of being duplicated in a second language — which
- * is how a bell and a notifications page end up disagreeing.
- *
- * A kind with no entry falls back rather than crashing: `new_match` and
- * `bookmark_update` are declared server-side and only one of them is written
- * today, so an unrecognised kind is a matter of when, not if.
- */
-const KINDS = {
-  new_message: {
-    icon: 'message',
-    route: (n) => (n.conversation_id ? `/messages/${n.conversation_id}` : null),
-  },
-  new_match: {
-    icon: 'spark',
-    route: (n) => (n.listing_id ? `/listings/${n.listing_id}` : null),
-  },
-}
-
-const FALLBACK = { icon: 'bell', route: () => null }
 
 function NotificationBell() {
   const { user } = useAuth()
@@ -111,12 +88,11 @@ function NotificationBell() {
           ) : (
             <ul className="bell-list">
               {notifications.map((notification) => {
-                const kind = KINDS[notification.type] ?? FALLBACK
-                const href = kind.route(notification)
+                const href = routeFor(notification)
 
                 const body = (
                   <>
-                    <Icon name={kind.icon} size="sm" />
+                    <Icon name={iconFor(notification.type)} size="sm" />
                     <span className="bell-text">
                       <span>{notification.text}</span>
                       <span className="bell-time">

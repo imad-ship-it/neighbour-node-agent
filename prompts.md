@@ -1860,6 +1860,60 @@ execution dragging the total. Fixed; the corrected numbers are the ones above.
 
 ---
 
+### 66. Writing down what the number doesn't say
+
+**Prompt:** capture the artifacts — both coverage figures with the exclusion named in
+words, the test composition while it's fresh, the call-site finding as a reflection
+paragraph, and the SQLite decision written twice: operational in the README, reasoning in
+the reflection doc.
+
+**Result.** Four documents rather than four numbers, and the writing forced two things into
+the open that the measuring had not.
+
+**Reach is not dependence, and that is the whole finding.** Coverage answers "was this line
+executed". It cannot answer "does anything rely on this line being here". Eleven tests
+covered `notify_listings_matched` — guards, cap, collapse window, payload, query count — and
+**every one passed with the call deleted from `rank_candidates`**. A perfect, unreachable
+service, green throughout, because the tests called the function directly. That is the third
+piece of testing-discipline evidence, and the strongest, because unlike the two prompt bugs
+it is about my own process rather than the model's.
+
+The fix is a test that exercises the *call site* rather than the function. It fails for
+exactly one reason, and it is the reason nothing else can see.
+
+**Composition had to be written today or reconstructed wrongly on Wednesday.** 169 backend
+tests split roughly 62 service-level, 92 API integration, 13 MCP protocol, 1 end-to-end
+journey; 16 frontend logic tests. Nobody remembers that ratio at 6pm, and deriving it from
+the file tree is both slow and quietly inaccurate — several files hold both kinds.
+
+**The SQLite decision needed two documents, not one.** The README wants the operational
+facts: single node, volume-mounted, WAL, one worker. The reflection doc wants the reasoning —
+that Postgres was cancelled under deadline, and what specifically would have to change. Two
+things, both checked rather than assumed: the notification collapse filter depends on
+SQLite's `json_extract()` semantics, and the extraction cache is `LocMemCache`, which is
+**per-process** — a second worker halves the hit rate and every miss is a paid vision call.
+That last one fails as a bill rather than as an error, which is why it is written down.
+
+There is a third, smaller one worth having: the collapse rule is an `exists()` followed by a
+`create()`, so simultaneous messages could both slip through. The real fix is a partial
+unique index, which **Postgres has and SQLite does not**. At one writer it cannot happen.
+Naming the concurrency assumption is what turns a shortcut into a scoped decision.
+
+**Two things the writing surfaced that the measuring missed.**
+
+First, **entry 59 was wrong**. It claimed `mergeMessages` had "twelve assertions run by
+plain node" — I ran them in a scratch file and never committed one. The claim had been sitting
+in the reflection doc for two days describing tests that did not exist. Now it does: sixteen
+frontend tests via `node:test`, no framework, no mocking, including the case that matters
+most — *someone else saying the same thing must not confirm my pending message*.
+
+Second, **Week 1's three component tests were never in this repo at all.** Not deleted by
+nine days of refactoring, as I half-expected: nothing test-shaped appears anywhere in the
+git history. The honest position is that frontend testing was scoped to pure logic in favour
+of API coverage, which is defensible. Silence about it would not have been.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2154,3 +2208,16 @@ execution dragging the total. Fixed; the corrected numbers are the ones above.
 - **Check that a coverage config excludes what you think it does.** `*/tests.py` does not
   match `test_mcp.py`. Test files were being measured as product code and quietly moving the
   number. A measurement tool needs its own sanity check before its output is quoted.
+- **Coverage measures reach, never dependence.** Eleven green tests around a service that
+  nothing called. "Was this executed" and "does anything rely on this" are different
+  questions, and only the second one is about whether the feature works.
+- **Write the composition down the day you build it.** Which tests are unit and which are
+  integration is obvious while writing them and guesswork a week later — several files hold
+  both. Reconstructing it from a file tree is slow and quietly wrong.
+- **A shortcut becomes a judgement call the moment you write down what would have to
+  change.** SQLite in production is indefensible as "we ran out of time" and entirely
+  defensible as "one writer, one node, and here are the two things that break at scale" —
+  same decision, different amount of thinking made visible.
+- **A claim in a reflection doc is a claim about the repo.** Entry 59 described twelve
+  frontend assertions that were run once in a scratch file and never committed. Documenting
+  work is not the same as landing it, and the doc had been wrong for two days.

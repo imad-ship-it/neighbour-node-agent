@@ -1676,6 +1676,70 @@ it was deliberate and already reverted, in the heading.
 
 ---
 
+### 63. The second trigger, and a test that only fails for one reason
+
+**Prompt:** notifications fire on two triggers. The message one exists; the match one needs
+deciding first. Then the bell, then the tests — interleaved, not batched.
+
+**The decision, which was the interesting part.** "A search returned new matches" sounds
+like it notifies the searcher, and that is useless: they are looking at the results. The
+value is the other direction — **tell the LENDER their listing ranked into someone's
+search**. "Your drill matched a request 1km away" is behaviour a lender would act on, it
+demos well, and it needs no saved-search feature to exist. Getting that backwards would
+have produced a technically-working feature nobody has a reason to open.
+
+It also caught a bug I had already written. Yesterday's serializer rendered `new_match` as
+*"New matches for your search"* — the borrower's sentence, written before the direction was
+settled. Under the lender-side decision that string is addressed to the wrong person
+entirely. The sentence is now "Cordless Drill matched a nearby request".
+
+**Three guards, each for a failure I could name:**
+
+- **Never notify the searcher about their own listing.** The seed data is full of
+  near-duplicates, so searching for something resembling your own item is common.
+- **Cap at the top few ranked results**, not the candidate set. The signal is "yours
+  ranked", not "yours was retrieved" — the whole set would light a dozen bells for listings
+  nobody looked at.
+- **Collapse per (owner, listing) within a window.** Demo searches repeat the same query
+  minutes apart. Without this a lender's bell reads "20" by lunchtime and means nothing.
+  Deliberately per *listing*, not per owner: one lender with two matching items should hear
+  about both.
+
+The collapse check is a single SELECT covering every owner in the batch rather than one per
+listing, because this runs inside a request whose latency gets watched live. Measured after
+wiring, as the brief asked: **6.5ms cold** writing three rows, **1ms warm** when the guard
+suppresses everything, against LLM calls of 800–3000ms. Under one percent of a match.
+
+**The test worth keeping is the one about the seam, not the logic.** Eleven tests already
+proved `notify_listings_matched` behaves correctly — guards, collapse, cap, payload shape,
+query count. **Every one of them would keep passing if the call were deleted from
+`rank_candidates`.** So there is a separate test that runs a real ranking and asserts a
+notification appeared. Removing that one line produced exactly one failure out of 62, with
+the service suite entirely green: the clearest possible statement that the code works and is
+never reached.
+
+Its sibling matters too: `rank_candidates` without a `searcher` must notify nobody. Every
+other test in that suite calls it that way, so if the default ever changed, the whole file
+would start writing rows as a side effect of testing something else — passing, and quietly
+wrong.
+
+**A gap the frontend forced.** Match notifications route to a listing, and there was no
+listing page — cards render in grids and aren't clickable. The brief's warning was exact: *a
+dead link in a dropdown is the kind of thing that gets clicked accidentally during a live
+demo*. So `/listings/:id` exists now, reusing `MessageLenderButton` rather than restating
+the hidden-on-your-own-listings rule. The bell also renders a row with no destination as
+plain text rather than a link, because a payload can legitimately lack an id.
+
+**What the client does NOT own: the sentence.** The kind map holds an icon and a route, and
+`text` comes from the server. Duplicating the wording client-side is how a bell and a
+notifications page end up disagreeing about what happened.
+
+**Unverified, and worth saying plainly:** the bell has not been opened in a browser. It
+builds and lints, the API beneath it has 137 passing tests, but the badge clearing, the
+dropdown's click-away, and both link destinations are reasoned about rather than seen.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -1925,3 +1989,17 @@ it was deliberate and already reverted, in the heading.
   Sections headed "worth knowing" and "the guard, proven" were taken as defects to fix.
   When a summary mentions a broken assertion, the heading itself has to carry that it was
   deliberate and already reverted.
+- **Test the seam separately from the logic it connects.** Eleven tests proved the match
+  notifier behaved; all eleven would have passed with the call deleted from the ranker.
+  A test that exercises the *call site* fails for exactly one reason, and it is the reason
+  no other test can see.
+- **Decide the direction of a notification before building it.** "A search found matches"
+  reads as news for the searcher, who is already looking at the results. The value was
+  entirely on the other side. A feature can be correct, tested and pointless if the
+  audience was chosen by grammar rather than by asking who would act on it.
+- **A string written before a decision outlives the decision.** The `new_match` sentence
+  was drafted borrower-side and survived into a lender-side feature, addressed to the wrong
+  person. When a direction is settled, grep for the copy written under the old assumption.
+- **A link with no destination should render as text.** Payload ids can legitimately be
+  absent, and a dropdown row that looks clickable and goes nowhere gets clicked — most
+  likely by someone demonstrating the product to a room.

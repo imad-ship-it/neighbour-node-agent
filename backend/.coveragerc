@@ -16,7 +16,11 @@ source = .
 omit =
     venv/*
     */migrations/*
+    # Both patterns: tests.py is Django's default, and test_*.py is what larger
+    # suites split into. Matching only the first silently measured test_mcp.py
+    # and friends as if they were product code.
     */tests.py
+    */test_*.py
     manage.py
     config/settings.py
     config/wsgi.py

@@ -1914,6 +1914,41 @@ of API coverage, which is defensible. Silence about it would not have been.
 
 ---
 
+### 67. The documentation nothing tests
+
+**Prompt:** fix the architecture diagram in the README.
+
+**Result:** the diagram was three apps out of date, and checking the section around it
+turned up something worse — **the endpoint table was missing all eight messaging and
+notification routes.** Nine days of building, two whole apps shipped and tested to 100%
+coverage, and the API reference still described the app as it stood before either existed.
+
+That is not carelessness so much as a structural property: **every other claim in this
+project has something that fails when it goes wrong.** A broken import fails a test. A wrong
+status code fails a permission sweep. A missing `lender_id` fails the end-to-end journey. A
+stale diagram fails nothing, ever, and neither does an incomplete endpoint table — so they
+rot at exactly the rate nobody is looking.
+
+The diagram had also lost the thing most worth showing. Its old version stopped at
+"API → services → LLM providers", which was accurate for the extraction-and-match app it was
+drawn for. What it could not show is the shape the project actually has now: **two
+independent triggers converging on one notification service**, one from a message being sent
+inside its transaction, one from a listing being ranked into someone else's search. That
+convergence is the most interesting structure in the codebase and it was invisible in the
+one artifact people look at first.
+
+Fixed both, and added the WAL/single-writer note to the database node so the SQLite decision
+is visible in the picture rather than only in prose three sections below.
+
+**The uncomfortable generalisation.** Test coverage measures the code. Nothing measures the
+documentation, and the reflection doc had already been caught once this week claiming
+frontend tests that did not exist (entry 66). Two documentation defects in two days, both
+found by reading rather than by running. The only mechanism that has actually worked is
+opening the file and comparing it to reality — which needs to be a scheduled act, not a
+hope.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2221,3 +2256,12 @@ of API coverage, which is defensible. Silence about it would not have been.
 - **A claim in a reflection doc is a claim about the repo.** Entry 59 described twelve
   frontend assertions that were run once in a scratch file and never committed. Documenting
   work is not the same as landing it, and the doc had been wrong for two days.
+- **Documentation rots because nothing fails when it does.** Every other claim here has a
+  test behind it; a stale diagram and a nine-day-old endpoint table break nothing and so
+  drift silently. Re-reading the README against the routing table has to be a scheduled act
+  — it is the one artifact people look at first and the only one with no alarm on it.
+- **A diagram should show the newest structure, not the original one.** The old version
+  still described the extraction-and-match app it was drawn for, and had no way to show two
+  independent triggers converging on one notification service — which is now the most
+  interesting shape in the codebase. Redraw when the architecture changes, not when it
+  becomes wrong.

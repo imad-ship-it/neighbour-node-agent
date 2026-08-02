@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useConversation } from '../hooks/useConversations'
@@ -21,7 +21,13 @@ function Thread() {
   const { mutate: markRead } = useMarkRead()
 
   const [draft, setDraft] = useState('')
-  const endOfThread = useRef(null)
+  const listRef = useRef(null)
+
+  // Whether the reader is sitting at the bottom of the thread. Starts true so
+  // the first batch of messages lands at the newest one.
+  const pinnedToBottom = useRef(true)
+  // Whether this thread has been scrolled into position at least once.
+  const hasLanded = useRef(false)
 
   // Newest id rather than length: length is unchanged when an optimistic
   // message is swapped for its real twin, so the two effects below would miss
@@ -36,9 +42,51 @@ function Thread() {
     if (signedIn && conversationId) markRead(conversationId)
   }, [signedIn, conversationId, newestId, markRead])
 
+  // Navigating between threads is a remount-less change of conversationId, so
+  // the scroll state has to be reset by hand or thread B inherits thread A's.
   useEffect(() => {
-    endOfThread.current?.scrollIntoView({ block: 'end' })
+    hasLanded.current = false
+    pinnedToBottom.current = true
+  }, [conversationId])
+
+  /**
+   * Three behaviours, not one.
+   *
+   *   opening a thread            -> jump to the newest message
+   *   a message arrives, at bottom -> follow it down
+   *   a message arrives, scrolled up -> DON'T MOVE
+   *
+   * The third is why this can't just scroll on every change: yanking someone
+   * to the bottom while they're reading history is the most irritating thing a
+   * chat UI can do, and it happens exactly when the conversation is liveliest.
+   *
+   * Sets scrollTop on the container rather than calling scrollIntoView on a
+   * sentinel div. The sentinel is zero-height and sits after the last message,
+   * so asking it to bring itself into view races the list's final height and
+   * silently does nothing — which is why threads were opening at the top.
+   *
+   * useLayoutEffect, not useEffect: this runs before paint, so the thread is
+   * already at the bottom on its first frame rather than visibly jumping.
+   */
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list || !newestId) return
+
+    if (!hasLanded.current || pinnedToBottom.current) {
+      list.scrollTop = list.scrollHeight
+      hasLanded.current = true
+    }
   }, [newestId])
+
+  function handleScroll() {
+    const list = listRef.current
+    if (!list) return
+    // A little slack: "near enough the bottom" counts as following along,
+    // which keeps the behaviour stable against sub-pixel rounding and a
+    // half-scrolled last message.
+    const fromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+    pinnedToBottom.current = fromBottom < 120
+  }
 
   function handleSubmit(event) {
     event.preventDefault()
@@ -86,13 +134,17 @@ function Thread() {
           ←
         </Link>
         {listing.image && <img src={listing.image} alt="" />}
+        {/* Person first, listing second — a thread is WITH someone, ABOUT
+            something, and that's the order you think in when you open it. The
+            conversation list does the opposite on purpose: there the listing is
+            what distinguishes two threads with the same lender. */}
         <span className="thread-head-text">
-          <span className="thread-title">{listing.title}</span>
-          <span className="thread-preview">with {other.username}</span>
+          <span className="thread-title">{other.username}</span>
+          <span className="thread-preview">{listing.title}</span>
         </span>
       </header>
 
-      <div className="message-list">
+      <div className="message-list" ref={listRef} onScroll={handleScroll}>
         {isLoading ? (
           <p className="state">Loading messages…</p>
         ) : messages.length === 0 ? (
@@ -117,7 +169,6 @@ function Thread() {
             )
           })
         )}
-        <div ref={endOfThread} />
       </div>
 
       {send.isError && (

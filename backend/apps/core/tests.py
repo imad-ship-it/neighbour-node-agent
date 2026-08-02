@@ -244,3 +244,159 @@ class ProviderSelectionTests(TestCase):
             get_provider("summarisation")
 
         self.assertIn("summarisation", str(caught.exception))
+
+
+class AnonymousAccessTests(TestCase):
+    """Every protected endpoint in the project, swept in one table.
+
+    Each app already tests its own permissions. This exists for the case those
+    cannot catch: someone adds a viewset next week, forgets permission_classes,
+    and every existing test still passes because none of them know the new
+    endpoint exists. A list in one place is the only thing that notices.
+
+    It also documents the public surface by omission — anything not here is
+    either public or doesn't exist.
+    """
+
+    # (method, path, body). Bodies are deliberately valid-ish: a 400 for a
+    # malformed payload would mask a missing 401, since both are "not a 200".
+    PROTECTED = [
+        ("post", "/api/listings/", {"title": "x"}),
+        ("post", "/api/listings/extract/", {}),
+        ("get", "/api/bookmarks/", None),
+        ("post", "/api/bookmarks/", {"listing": 1}),
+        ("post", "/api/match/", {"text": "a drill", "lat": 40.0, "lng": -75.0}),
+        ("get", "/api/conversations/", None),
+        ("post", "/api/conversations/", {"listing": 1}),
+        ("get", "/api/messages/", None),
+        ("post", "/api/messages/", {"conversation": 1, "body": "hi"}),
+        ("get", "/api/notifications/", None),
+        ("get", "/api/notifications/unread_count/", None),
+        ("post", "/api/notifications/mark_read/", {"ids": []}),
+        ("get", "/api/auth/me/", None),
+    ]
+
+    PUBLIC = [
+        ("get", "/api/listings/"),
+    ]
+
+    def test_every_protected_endpoint_rejects_an_anonymous_caller(self):
+        client = APIClient()
+
+        for method, path, body in self.PROTECTED:
+            with self.subTest(endpoint=f"{method.upper()} {path}"):
+                call = getattr(client, method)
+                response = (
+                    call(path, body, format="json") if body is not None else call(path)
+                )
+                # 401, not 403: SimpleJWT supplies a WWW-Authenticate header, so
+                # DRF reports "you are not authenticated" rather than "you may
+                # not". A 403 here would mean the endpoint ran its permission
+                # check without ever asking who was calling.
+                self.assertEqual(response.status_code, 401)
+
+    def test_browsing_stays_public(self):
+        """The counterweight. It would be easy to fix a failing sweep above by
+        locking everything down, and browsing listings logged-out is the point
+        of the product."""
+        client = APIClient()
+
+        for method, path in self.PUBLIC:
+            with self.subTest(endpoint=f"{method.upper()} {path}"):
+                self.assertEqual(getattr(client, method)(path).status_code, 200)
+
+
+class NotYoursTests(TestCase):
+    """403 or 404 — the rule, stated once, across every app that has rows.
+
+    docs/api-conventions.md rule 2: a PUBLIC RESOURCE refuses with 403, because
+    its existence is not a secret. A PRIVATE ROW refuses with 404, because
+    confirming it exists is itself a disclosure.
+
+    The apps are tested individually elsewhere; the point of gathering them
+    here is that the inconsistency is the bug. Reading this table is how you
+    check the convention actually holds rather than hoping it does.
+    """
+
+    def setUp(self):
+        from apps.bookmarks.models import Bookmark
+        from apps.core.testing import make_conversation, make_listing, make_user
+        from apps.notifications.models import Notification
+
+        self.owner = make_user("owner")
+        self.other = make_user("other-party")
+        self.stranger = make_user("stranger")
+
+        self.listing = make_listing(self.owner, "Cordless Drill")
+        self.bookmark = Bookmark.objects.create(user=self.owner, listing=self.listing)
+        # A thread between owner and other-party. The stranger is neither the
+        # initiator nor the listing's lender, so they are genuinely outside it.
+        self.conversation = make_conversation(self.listing, self.other)
+        self.notification = Notification.objects.create(
+            user=self.owner,
+            type=Notification.NotificationType.NEW_MESSAGE,
+            payload={"conversation_id": self.conversation.id},
+        )
+
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.stranger)
+
+    def test_the_refusal_code_matches_the_kind_of_row(self):
+        cases = [
+            # A listing is public: its existence is already discoverable by
+            # browsing, so hiding it behind a 404 would be theatre.
+            ("public resource", "patch", f"/api/listings/{self.listing.id}/", 403),
+            # Private rows. A 403 would confirm the id is real.
+            ("private row", "get", f"/api/bookmarks/{self.bookmark.id}/", 404),
+            ("private row", "delete", f"/api/bookmarks/{self.bookmark.id}/", 404),
+            ("private row", "get", f"/api/conversations/{self.conversation.id}/", 404),
+            (
+                "private row",
+                "post",
+                f"/api/conversations/{self.conversation.id}/read/",
+                404,
+            ),
+            ("private row", "get", f"/api/notifications/{self.notification.id}/", 404),
+        ]
+
+        for kind, method, path, expected in cases:
+            with self.subTest(kind=kind, endpoint=f"{method.upper()} {path}"):
+                call = getattr(self.client, method)
+                response = (
+                    call(path, {"title": "hijacked"}, format="json")
+                    if method in ("patch", "post")
+                    else call(path)
+                )
+                self.assertEqual(response.status_code, expected)
+
+    def test_a_refused_request_changes_nothing(self):
+        """A status code says what the response was, not whether the write
+        landed before the check."""
+        original = self.listing.title
+
+        self.client.patch(
+            f"/api/listings/{self.listing.id}/",
+            {"title": "hijacked"},
+            format="json",
+        )
+        self.client.delete(f"/api/bookmarks/{self.bookmark.id}/")
+
+        self.listing.refresh_from_db()
+        self.assertEqual(self.listing.title, original)
+        self.assertTrue(
+            type(self.bookmark).objects.filter(pk=self.bookmark.id).exists()
+        )
+
+    def test_private_rows_are_invisible_in_their_lists_too(self):
+        """404 on the detail route is only half the guarantee — a row that 404s
+        individually but appears in the collection has leaked anyway."""
+        cases = [
+            ("bookmarks", "/api/bookmarks/"),
+            ("conversations", "/api/conversations/"),
+        ]
+        for label, path in cases:
+            with self.subTest(collection=label):
+                self.assertEqual(list(self.client.get(path).data), [])
+
+        # Notifications paginate, so the rows live under "results".
+        self.assertEqual(self.client.get("/api/notifications/").data["results"], [])

@@ -1,8 +1,18 @@
 import axios from 'axios'
 import { getAccessToken } from './tokenStore'
 
+// Configurable for deployment, with a working local default.
+//
+// `import.meta.env` and the VITE_ prefix are Vite's; `process.env` with a
+// REACT_APP_ prefix is Create React App's, and using it here does not fail
+// loudly — Vite compiles `process.env` to `{}`, so the variable reads as
+// undefined and every request silently falls back to the other branch.
+//
+// The default stays absolute rather than relative. `.env` is gitignored, so a
+// fresh clone has no variable set; a relative '/api/' would then point at the
+// Vite dev server, which has no proxy configured, and every call would 404.
 const client = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api',
 })
 
 // DRF authenticates before it checks permissions, so a stale token sent to an

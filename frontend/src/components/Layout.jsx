@@ -1,5 +1,6 @@
 import { Link, NavLink } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import NotificationBell from './NotificationBell'
 
 function Layout({ children }) {
   const { user, logout } = useAuth()
@@ -23,6 +24,7 @@ function Layout({ children }) {
                   arriving by URL. */}
               <NavLink to="/saved">Saved</NavLink>
               <NavLink to="/messages">Messages</NavLink>
+              <NotificationBell />
               <span className="who">{user.username}</span>
               <button className="btn btn-ghost" onClick={logout}>
                 Log out

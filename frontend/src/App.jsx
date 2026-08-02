@@ -7,6 +7,7 @@ import Match from './pages/Match'
 import Bookmarks from './pages/Bookmarks'
 import Conversations from './pages/Conversations'
 import Thread from './pages/Thread'
+import ListingDetail from './pages/ListingDetail'
 import CreateListingForm from './pages/CreateListingForm'
 import './App.css'
 
@@ -19,6 +20,7 @@ function App() {
         <Route path="/saved" element={<Bookmarks />} />
         <Route path="/messages" element={<Conversations />} />
         <Route path="/messages/:id" element={<Thread />} />
+        <Route path="/listings/:id" element={<ListingDetail />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/create" element={<CreateListingForm />} />

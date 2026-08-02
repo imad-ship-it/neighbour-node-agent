@@ -752,3 +752,128 @@
   outline: 2px solid var(--accent-border);
   outline-offset: 1px;
 }
+
+/* ---------- notification bell ---------- */
+
+.bell {
+  position: relative;
+}
+
+.bell-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.bell-button:hover {
+  background: var(--social-bg);
+}
+
+.bell-badge {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+}
+
+.bell-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(340px, calc(100vw - 32px));
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.bell-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bell-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.bell-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+a.bell-row:hover {
+  background: var(--social-bg);
+}
+
+/* Unread rows carry a left edge rather than a background tint, so the hover
+   state stays legible on top of them. */
+.bell-unread .bell-row {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.bell-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bell-time {
+  font-size: 12px;
+}
+
+/* ---------- listing detail ---------- */
+
+.listing-detail {
+  max-width: 720px;
+}
+
+.detail-back {
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+
+.detail-media {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--code-bg);
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.detail-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-description {
+  margin: 16px 0 24px;
+  white-space: pre-wrap;
+}

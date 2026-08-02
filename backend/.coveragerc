@@ -1,0 +1,40 @@
+[run]
+# Branch coverage, not merely statement coverage.
+#
+# Almost every guard in this project is an `if` whose true side runs constantly
+# and whose false side may never have been exercised — permission checks,
+# notification collapse rules, the "is this listing mine" test, the payload
+# fallbacks. Statement coverage reports all of those as fully covered the first
+# time the line executes, which is exactly the flattery worth avoiding.
+branch = True
+
+# Measure everything under backend/ and list the exclusions explicitly below.
+# A narrow `source` hides omissions by implication; one broad source plus a
+# visible omit list means every exclusion is a decision someone can read.
+source = .
+
+omit =
+    venv/*
+    */migrations/*
+    */tests.py
+    manage.py
+    config/settings.py
+    config/wsgi.py
+    config/asgi.py
+
+# Deliberately nothing else. The list above is six standard categories —
+# generated code, configuration, entrypoints and the tests themselves — and
+# every one of them is conventional enough to need no defending.
+#
+# Hand-run developer scripts (setup_demo_accounts.py, fill_demo_thread.py,
+# mcp_client_demo.py) were omitted at first and then put back. They really are
+# unshipped utilities, and excluding them really would have been defensible —
+# but a coverage figure is only worth quoting if the exclusions need no
+# argument. Being able to say "migrations, settings, entrypoints, tests, venv"
+# and stop is worth more than the two points those files cost.
+
+[report]
+show_missing = True
+skip_covered = False
+# Sort by missing lines so the worst modules surface first without a flag.
+sort = -miss

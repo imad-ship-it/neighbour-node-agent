@@ -55,3 +55,4 @@ typing_extensions==4.16.0
 tzdata==2026.3
 uvicorn==0.52.0
 virtualenv==21.7.0
+coverage==7.15.3

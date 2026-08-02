@@ -6,3 +6,8 @@ node_modules/
 
 backend/db.sqlite3
 backend/media/
+
+# Coverage artefacts: a binary data file and a generated HTML tree. Both are
+# rebuilt by `coverage run` / `coverage html` and neither is worth reviewing.
+backend/.coverage
+backend/htmlcov/

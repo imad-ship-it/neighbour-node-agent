@@ -1794,6 +1794,72 @@ footnote about what was excluded.
 
 ---
 
+### 65. Aiming at the report, and one test that outlived its reason
+
+**Prompt:** close the coverage gaps in a stated order — HTTP end-to-end first, then provider
+selection, the MCP server through its protocol, a call-site audit, permissions, and two
+Postgres-facing tests.
+
+**Result: product coverage 78% → 91%, overall 64% → 76%, 137 → 169 tests.** The ordering
+was the useful part, and it came from the report rather than from instinct.
+
+**One artifact fixed the two worst files.** A single signup → login → photo-to-draft →
+create → search journey took `matching/views.py` from 23% to 74% and `listings/views.py`
+from 65% to 85%. Both had well-tested service layers and untested endpoints — the same seam
+problem as entry 63, showing up as two numbers in a table instead of as a bug. It uses a
+real bearer token rather than `force_authenticate`, because the latter skips the JWT layer,
+which is where a client's problems actually live.
+
+**Testing the MCP server meant testing the protocol, not the functions.** `geo_search` and
+`trust_check` are thin adapters over already-covered services; calling them directly would
+have proved nothing new. What was untested was everything between a client and that logic —
+tool registration, the JSON schema derived from each signature, argument validation, the
+response shape. The library's in-memory transport gives all of that without spawning a
+subprocess. Two things that would have cost an hour cold: it needs `TransactionTestCase`,
+because sync tools dispatch on worker threads and `TestCase`'s wrapping transaction makes
+every fixture invisible to them; and the discovery test — *both tools and the resource are
+advertised* — is the Phase 3 deliverable restated as an assertion, failing if a decorator is
+deleted.
+
+**The call-site audit found nothing, which was the finding.** Seven seams removed one at a
+time: four trust rules, the cache read, the cache write, the annotator seam. Every one
+produced failures, and the trust-rule failures named themselves through `subTest` labels —
+`rule='price far outside its band'`. The cache was the exception worth noting: **removing
+the read and removing the write produce identical failures**, the same two tests with the
+same messages. Both are caught, so it is not a coverage gap; it is a *diagnostic* one, and
+it makes the case for table-driven tests better than an argument could — the trust rules
+tell you which rule broke, the cache makes you bisect.
+
+**A dead branch, deleted rather than covered.** Branch coverage showed `IsOwnerOrReadOnly`'s
+anonymous check had only ever evaluated one way. It is unreachable: the class is only ever
+composed with `IsAuthenticatedOrReadOnly`, so an anonymous write 401s before object
+permissions run, and an anonymous read returns at the `SAFE_METHODS` line above. Statement
+coverage reported that file as green. The comment now records the composition that made it
+dead, so the check comes back if anyone pairs the class with `AllowAny`.
+
+**The re-evaluation worth keeping.** Two tests were planned as Postgres insurance: one
+pinning the JSONField collapse lookup, one pinning numeric precision. After the Postgres
+move was cancelled I kept both, and that was wrong on the first. The collapse behaviour is
+already asserted by eleven notifier tests from entry 63 — writing a second version of it was
+duplicate coverage dressed as diligence, justified by a migration that is no longer
+happening. **Deleted it.** The precision test was kept, and not because it survived a
+cull: it was never really about Postgres. `distance_km` and the daily rate are rendered
+verbatim on a match card, so a coercion bug shows up as `1.4177446878757824 km away` in
+front of an audience. Rewritten to assert through the HTTP response rather than the model,
+which is where the Haversine tests cannot see.
+
+That rewrite found something. The match response builds `ListingSummary` with **pydantic**,
+while `/api/listings/` uses **DRF** — two independent serialization paths for the same
+price. They both produce `"3.00"`, and that agreement was an assumption until it became an
+assertion.
+
+**Correction:** the coverage config omitted `*/tests.py` but not `*/test_*.py`, so
+`test_mcp.py` and the portability module were being measured as product code. Every figure
+quoted before that fix was mildly wrong in an unhelpful direction — test files with partial
+execution dragging the total. Fixed; the corrected numbers are the ones above.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2072,3 +2138,19 @@ footnote about what was excluded.
 - **The cheapest lines to cover are the ones least worth covering.** A dozen modules were one
   line short of 100%, every one a model's `__str__`. A coverage number stays useful only
   while you are still willing to leave those red.
+- **When the reason for a test disappears, re-read the test.** Two were written as Postgres
+  insurance. When the migration was cancelled I kept both out of momentum; one was already
+  covered elsewhere and had to go, the other turned out never to have been about Postgres at
+  all. Cancelled work leaves artefacts behind, and "we already wrote it" is not a reason to
+  keep something.
+- **Assert where the value is read, not where it is computed.** The Haversine tests check the
+  distance; only an HTTP-level test can see whether it survives serialization as a number
+  rounded to the places the card displays. A value is correct at the point of use or it isn't
+  correct.
+- **Two serializers for one field is two contracts.** The match response uses pydantic and
+  the listings endpoint uses DRF, for the same price. They agree — which was an assumption
+  until something asserted it, and assumptions about parallel code paths are the ones that
+  drift.
+- **Check that a coverage config excludes what you think it does.** `*/tests.py` does not
+  match `test_mcp.py`. Test files were being measured as product code and quietly moving the
+  number. A measurement tool needs its own sanity check before its output is quoted.

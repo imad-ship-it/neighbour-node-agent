@@ -23,6 +23,12 @@ def conversations_for(user):
     against the generated SQL rather than assumed — adding .distinct() "to be
     safe" would mask a genuine join bug later.
     """
+    # Unreachable at runtime — every caller sits behind IsAuthenticated — but
+    # OpenAPI schema generation calls the viewsets' get_queryset() with an
+    # anonymous request, and filtering on AnonymousUser raises rather than
+    # matching nothing.
+    if not user or not user.is_authenticated:
+        return Conversation.objects.none()
     return Conversation.objects.filter(Q(initiator=user) | Q(listing__lender=user))
 
 
@@ -42,6 +48,12 @@ def annotated_conversations_for(user):
        report ZERO unread instead of all of them. Exactly backwards, and it
        looks plausible.
     """
+    # Guarded here as well as in conversations_for: the annotations below feed
+    # `user` into Case/When, which raises on AnonymousUser rather than matching
+    # nothing. Only reachable during schema generation.
+    if not user or not user.is_authenticated:
+        return Conversation.objects.none()
+
     latest = Message.objects.filter(conversation=OuterRef("pk")).order_by("-created_at")
 
     return (

@@ -7,6 +7,8 @@ from django.db.models import (
     Subquery,
     Value,
 )
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -74,6 +76,47 @@ class ListingExtractView(APIView):
 
     permission_classes = [permissions.IsAuthenticated]
 
+    @extend_schema(
+        operation_id="listings_extract",
+        summary="Photo → draft listing",
+        description=(
+            "Runs a vision model over an uploaded photo and returns a DRAFT. "
+            "Nothing is saved: the lender reviews and edits, then POSTs to "
+            "`/api/listings/` to create the real listing.\n\n"
+            "The draft carries no location — extraction cannot know where the "
+            "item is, so the client supplies `latitude`/`longitude` at create "
+            "time.\n\n"
+            "Results are cached for 24h on the SHA-256 of the image bytes plus "
+            "description, so re-submitting the same photo costs nothing."
+        ),
+        request={
+            "multipart/form-data": {
+                "type": "object",
+                "required": ["image"],
+                "properties": {
+                    "image": {"type": "string", "format": "binary"},
+                    "description": {
+                        "type": "string",
+                        "description": "Optional hint from the lender.",
+                    },
+                },
+            }
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "category": {"type": "string"},
+                    "condition": {"type": "string"},
+                    "suggested_price": {"type": "string", "example": "35.00"},
+                },
+            },
+            400: OpenApiTypes.OBJECT,
+            502: OpenApiTypes.OBJECT,
+        },
+    )
     def post(self, request):
         image = request.FILES.get("image")
         if image is None:

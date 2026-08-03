@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -47,9 +49,31 @@ class NotificationViewSet(
 
         Someone else's notification simply isn't in the queryset, so it 404s
         rather than 403ing. Private row, rule 2.
-        """
-        return Notification.objects.filter(user=self.request.user)
 
+        The anonymous guard is not reachable at runtime — IsAuthenticated has
+        already refused — but OpenAPI schema generation calls this with an
+        unauthenticated request, and filtering on AnonymousUser raises rather
+        than returning nothing.
+        """
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Notification.objects.none()
+        return Notification.objects.filter(user=user)
+
+    @extend_schema(
+        summary="Just the number the badge shows",
+        description=(
+            "One `COUNT(*)`. Deliberately separate from the list: the bell "
+            "polls this every ~10 seconds on every page, and reusing the list "
+            "endpoint would ship twenty serialized rows so a client can render "
+            "one digit.\n\n"
+            "The response has no `results` key precisely so nobody starts "
+            "reading rows out of it."
+        ),
+        responses={
+            200: {"type": "object", "properties": {"unread": {"type": "integer"}}}
+        },
+    )
     @action(detail=False, methods=["get"], url_path="unread_count")
     def unread_count(self, request):
         """Just the number. This is the endpoint the bell polls.
@@ -66,6 +90,39 @@ class NotificationViewSet(
         """
         return Response({"unread": self.get_queryset().filter(is_read=False).count()})
 
+    @extend_schema(
+        summary="Clear what the user just saw",
+        description=(
+            "Takes the ids currently rendered, because the agreed semantics "
+            "are 'opening the dropdown clears what you were shown' and the "
+            "server cannot guess which rows those were.\n\n"
+            "Idempotent: already-read rows are filtered out before the update, "
+            "so re-sending the same ids reports `marked: 0` rather than "
+            "erroring. An id belonging to someone else matches nothing and is "
+            "ignored silently — a 404 would confirm it exists.\n\n"
+            "Returns the fresh count so the badge clears immediately instead of "
+            "waiting for the next poll."
+        ),
+        request={
+            "application/json": {
+                "type": "object",
+                "required": ["ids"],
+                "properties": {
+                    "ids": {"type": "array", "items": {"type": "integer"}},
+                },
+            }
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "marked": {"type": "integer"},
+                    "unread": {"type": "integer"},
+                },
+            },
+            400: OpenApiTypes.OBJECT,
+        },
+    )
     @action(detail=False, methods=["post"], url_path="mark_read")
     def mark_read(self, request):
         """Mark a set of notifications read. Idempotent by construction.

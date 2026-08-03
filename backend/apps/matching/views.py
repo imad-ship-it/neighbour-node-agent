@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -22,6 +24,110 @@ class MatchView(APIView):
 
     permission_classes = [permissions.IsAuthenticated]
 
+    # Hand-written because this is an APIView over a pydantic response rather
+    # than a ModelSerializer — nothing here is introspectable, and without it
+    # the project's flagship endpoint is absent from its own documentation.
+    @extend_schema(
+        operation_id="match_search",
+        summary="Free-text search, ranked and explained",
+        description=(
+            "Four steps behind one call: understand the request, retrieve "
+            "nearby candidates by hard filters, trust-check them, then rank "
+            "with explanations. All four share a `run_id` that ties them "
+            "together in `TraceLog`.\n\n"
+            "The previous query is carried in as context so a follow-up "
+            "refines rather than restarts; send `fresh: true` to ignore it.\n\n"
+            "`degraded: true` means the ranking model failed and results fell "
+            "back to distance order — deliberately still an answer rather than "
+            "an error. `widened: true` means nothing was in range and the "
+            "radius was expanded."
+        ),
+        request={
+            "application/json": {
+                "type": "object",
+                "required": ["text", "lat", "lng"],
+                "properties": {
+                    "text": {"type": "string", "example": "a drill for shelves"},
+                    "lat": {"type": "number", "example": 40.0},
+                    "lng": {"type": "number", "example": -75.0},
+                    "fresh": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Ignore the remembered previous query.",
+                    },
+                },
+            }
+        },
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "candidate_count": {"type": "integer"},
+                    "refined": {"type": "boolean"},
+                    "widened": {"type": "boolean"},
+                    "degraded": {"type": "boolean"},
+                    "matches": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "listing_id": {"type": "integer"},
+                                "rank": {"type": "integer"},
+                                "score": {"type": "number"},
+                                "explanation": {"type": "string"},
+                                "matched_factors": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "concerns": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                        },
+                    },
+                    "listings": {
+                        "type": "array",
+                        "description": (
+                            "Server-resolved detail for each match. Carries "
+                            "`distance_km`, which is computed per search and is "
+                            "not a field on Listing, and `lender_id`, which the "
+                            "client needs to hide 'message the lender' on your "
+                            "own listings. Neither can be reconstructed by "
+                            "joining against /api/listings/."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "title": {"type": "string"},
+                                "category": {"type": "string"},
+                                "condition": {"type": "string"},
+                                "price": {"type": "string", "example": "18.00"},
+                                "distance_km": {"type": "number", "example": 1.4},
+                                "image": {"type": "string"},
+                                "lender_id": {"type": "integer"},
+                            },
+                        },
+                    },
+                },
+            },
+            400: OpenApiTypes.OBJECT,
+            502: OpenApiTypes.OBJECT,
+        },
+        examples=[
+            OpenApiExample(
+                "A neighbourhood search",
+                value={
+                    "text": "something to help me put up shelves",
+                    "lat": 40.0,
+                    "lng": -75.0,
+                },
+                request_only=True,
+            )
+        ],
+    )
     def post(self, request):
         text = request.data.get("text", "").strip()
         if not text:

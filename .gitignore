@@ -11,3 +11,9 @@ backend/media/
 # rebuilt by `coverage run` / `coverage html` and neither is worth reviewing.
 backend/.coverage
 backend/htmlcov/
+
+# The OpenAPI schema is generated from the code on every request to
+# /api/schema/. Committing a copy would create exactly the drift the generated
+# docs exist to prevent — a second description of the API that nothing keeps
+# honest.
+backend/schema.yml

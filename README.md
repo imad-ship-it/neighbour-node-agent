@@ -382,6 +382,32 @@ shape of the code around it.
 
 Authenticated requests use `Authorization: Bearer <access-token>`.
 
+### Interactive docs
+
+The table above is written by hand and can drift — it did, for nine days, while
+messaging and notifications shipped. The generated schema cannot:
+
+| | |
+|---|---|
+| `/api/docs/` | Swagger UI — browse and call every endpoint |
+| `/api/schema/` | The raw OpenAPI 3 document |
+
+Built with **drf-spectacular**, derived from the serializers and viewsets
+themselves. The endpoints that aren't `ModelViewSet`s — `/api/match/`,
+`/api/listings/extract/`, `/api/auth/me/` and the three custom actions — carry
+hand-written `@extend_schema` blocks, because an APIView over a pydantic
+response has nothing to introspect and would otherwise be missing from its own
+documentation.
+
+Regenerate as a file with:
+
+```bash
+python manage.py spectacular --validate --file schema.yml
+```
+
+It is gitignored on purpose: a committed copy would be a second description of
+the API that nothing keeps honest.
+
 **API conventions.** Bookmarks is the first *join-row* feature — a row whose only job is to
 connect a user to something else. Messaging threads and notifications are the same shape, so
 the decisions were made once, deliberately, in the cheapest place to change them:

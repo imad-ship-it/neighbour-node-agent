@@ -19,9 +19,19 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # The schema is generated from the serializers and viewsets themselves, so
+    # it cannot drift from the code the way a hand-written reference does —
+    # which the endpoint table in the README managed to do for nine days.
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path(
+        "api/docs/",
+        SpectacularSwaggerView.as_view(url_name="schema"),
+        name="swagger-ui",
+    ),
     path("api/auth/", include("apps.users.urls")),
     path("api/", include("apps.listings.urls")),
     path("api/", include("apps.matching.urls")),

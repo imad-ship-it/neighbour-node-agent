@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "corsheaders",
     "apps.users",
     "apps.listings",
@@ -57,6 +58,35 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# The generated OpenAPI schema. Descriptions live here rather than only in
+# docstrings so the published docs read as documentation rather than as leaked
+# implementation notes.
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Neighbour Node API",
+    "DESCRIPTION": (
+        "Neighbourhood lending: listings, an LLM match agent, bookmarks, "
+        "messaging and notifications.\n\n"
+        "All endpoints except registration, login and listing reads require "
+        "`Authorization: Bearer <access-token>`.\n\n"
+        "Two conventions worth knowing before reading further:\n\n"
+        "- **Private rows 404, public resources 403.** A bookmark, thread or "
+        "notification belonging to someone else is reported as not found, "
+        "because confirming it exists is itself a disclosure. A listing you "
+        "do not own returns 403 — its existence is not a secret.\n"
+        "- **Creates are idempotent** where a double-tap is plausible. "
+        "Bookmarking something twice, or opening a conversation that already "
+        "exists, returns the existing row with 200 rather than erroring."
+    ),
+    "VERSION": "1.0.0",
+    # The schema endpoint itself is not part of the API being described.
+    "SERVE_INCLUDE_SCHEMA": False,
+    # Strip the "api" prefix from generated operation ids, so they read
+    # listings_list rather than api_listings_list.
+    "SCHEMA_PATH_PREFIX": "/api",
+    "COMPONENT_SPLIT_REQUEST": True,
 }
 
 # SimpleJWT defaults to a 5-minute access token. The frontend holds it in memory

@@ -56,3 +56,6 @@ tzdata==2026.3
 uvicorn==0.52.0
 virtualenv==21.7.0
 coverage==7.15.3
+drf-spectacular==0.30.0
+inflection==0.5.1
+uritemplate==4.2.0

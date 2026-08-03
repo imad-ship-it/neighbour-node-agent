@@ -1,6 +1,7 @@
 from apps.notifications.services import clear_message_notifications, notify_new_message
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -55,6 +56,24 @@ class ConversationViewSet(
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
+    @extend_schema(
+        summary="Mark this thread read up to now",
+        description=(
+            "Stamps the read timestamp for *your* side of the conversation. "
+            "Which column that is depends on whether you are the initiator or "
+            "the listing's lender, and the client has no business knowing — "
+            "which is why this is an action rather than a PATCH.\n\n"
+            "Idempotent: 'read up to now' twice is not a toggle.\n\n"
+            "Also clears this thread's unread notifications, and that is not "
+            "housekeeping — the collapse rule suppresses new notifications "
+            "while an unread one exists, so leaving them would silence the "
+            "thread permanently.\n\n"
+            "Returns the conversation with a recomputed `unread_count`, so the "
+            "badge can clear without a second request."
+        ),
+        request=None,
+        responses={200: ConversationSerializer},
+    )
     @action(detail=True, methods=["post"])
     def read(self, request, pk=None):
         """Mark this thread read up to now.
@@ -105,8 +124,12 @@ class MessageViewSet(
         first and checking membership second is how someone reads a thread they
         aren't in, and it looks identical in review.
         """
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Message.objects.none()  # schema generation; see queries.py
+
         queryset = Message.objects.filter(
-            conversation__in=conversations_for(self.request.user)
+            conversation__in=conversations_for(user)
         ).select_related("sender")
 
         conversation_id = self.request.query_params.get("conversation")

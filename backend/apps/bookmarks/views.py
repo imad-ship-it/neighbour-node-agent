@@ -29,8 +29,14 @@ class BookmarkViewSet(
         another user's bookmark simply isn't in the queryset, so it 404s instead
         of 403ing — a 403 would confirm the row exists to someone with no
         business knowing that. Rule 2. Messaging threads must do the same.
+
+        The anonymous guard is unreachable at runtime — IsAuthenticated has
+        already refused — but schema generation calls this without a user.
         """
-        return Bookmark.objects.filter(user=self.request.user).select_related(
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Bookmark.objects.none()
+        return Bookmark.objects.filter(user=user).select_related(
             "listing", "listing__lender"
         )
 

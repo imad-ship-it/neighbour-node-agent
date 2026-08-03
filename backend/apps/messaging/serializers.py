@@ -1,5 +1,6 @@
 from apps.listings.models import Listing
 from apps.listings.serializers import ListingHeaderSerializer
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import Conversation, Message
@@ -40,6 +41,12 @@ class ConversationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
+    @extend_schema_field(
+        {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, "username": {"type": "string"}},
+        }
+    )
     def get_other_participant(self, conversation):
         """Whoever isn't the requester. Both sides are select_related in
         annotated_conversations_for, so this costs no query on the list path."""
@@ -109,6 +116,12 @@ class MessageSerializer(serializers.ModelSerializer):
             fields["conversation"].queryset = conversations_for(request.user)
         return fields
 
+    @extend_schema_field(
+        {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}, "username": {"type": "string"}},
+        }
+    )
     def get_sender(self, message):
         return {"id": message.sender_id, "username": message.sender.username}
 

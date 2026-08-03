@@ -28,6 +28,10 @@ function Thread() {
   const pinnedToBottom = useRef(true)
   // Whether this thread has been scrolled into position at least once.
   const hasLanded = useRef(false)
+  // True while WE are setting scrollTop. Browsers fire a scroll event for
+  // programmatic scrolls exactly as they do for a finger on a trackpad, and
+  // without this flag the two are indistinguishable.
+  const selfScrolling = useRef(false)
 
   // Newest id rather than length: length is unchanged when an optimistic
   // message is swapped for its real twin, so the two effects below would miss
@@ -72,13 +76,42 @@ function Thread() {
     const list = listRef.current
     if (!list || !newestId) return
 
-    if (!hasLanded.current || pinnedToBottom.current) {
+    const jump = () => {
+      // Setting scrollTop fires a scroll event. handleScroll must not treat
+      // that as the reader moving, or a long thread latches "not at the
+      // bottom" the instant we scroll it there and never follows again.
+      selfScrolling.current = true
       list.scrollTop = list.scrollHeight
-      hasLanded.current = true
+      requestAnimationFrame(() => {
+        selfScrolling.current = false
+      })
     }
-  }, [newestId])
+
+    if (hasLanded.current) {
+      if (pinnedToBottom.current) jump()
+      return
+    }
+
+    // First landing. Jump now, then again on the next frame: a long history
+    // can still be settling its height on this pass, and a scroll issued
+    // against a container that is not yet its full size does nothing at all.
+    // That is why short threads landed correctly and long ones stayed at the
+    // top — the no-op scroll still marked the thread as landed.
+    jump()
+    requestAnimationFrame(() => {
+      const current = listRef.current
+      if (!current) return
+      jump()
+      // Only consider it landed once there is genuinely something to scroll.
+      // Latching on a container that fits its content means a thread that
+      // grows later never gets its initial jump.
+      if (current.scrollHeight > current.clientHeight) hasLanded.current = true
+    })
+  }, [newestId, messages.length])
 
   function handleScroll() {
+    if (selfScrolling.current) return
+
     const list = listRef.current
     if (!list) return
     // A little slack: "near enough the bottom" counts as following along,

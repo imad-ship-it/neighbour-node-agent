@@ -1949,6 +1949,57 @@ hope.
 
 ---
 
+### 68. The generator that refused to run
+
+**Prompt:** add drf-spectacular — generated schema plus a Swagger page, roughly thirty
+minutes, a clean ten-second beat in the demo.
+
+**Result.** Eighteen endpoints documented, schema validating with zero warnings, at
+`/api/docs/`. Two things made it more interesting than a dependency and two URL patterns.
+
+**It crashed immediately, and the reason was worth the crash.** Schema generation walks
+every viewset and calls `get_queryset()` — with an **anonymous** request, because it never
+goes through the permission layer. Four viewsets do `filter(user=self.request.user)`, and
+Django refuses to cast `AnonymousUser` to an integer:
+
+```
+TypeError: Cannot cast AnonymousUser to int. Are you trying to use it in place of User?
+```
+
+That code is unreachable at runtime: `IsAuthenticated` has already returned 401 by the time
+`get_queryset` runs. So the fix is a guard that production will never execute — which felt
+wrong to write until the framing landed. **`get_queryset()` is not a private method of the
+request cycle.** A schema generator calls it, and so would a management command, an admin
+action, or a test. Assuming an authenticated user was an assumption about *one* caller,
+written when there was only one.
+
+Each guard says so, and says it is only reachable during schema generation, so nobody
+deletes it as dead code — or worse, "fixes" it by removing the anonymous branch that makes
+the docs buildable.
+
+**The endpoints that mattered most were the ones it couldn't see.** `/api/match/`,
+`/api/listings/extract/` and `/api/auth/me/` are `APIView`s returning plain dicts or pydantic
+models. drf-spectacular reported them as *"unable to guess serializer… ignoring view for
+now"* — meaning **the project's flagship endpoint would have been absent from its own
+documentation**, and the two custom notification actions would have been documented as
+returning a `Notification` when one returns `{"unread": n}` and the other
+`{"marked": n, "unread": n}`.
+
+Auto-generated documentation is only as good as what the framework can introspect, and the
+most interesting endpoints are usually the least introspectable, because interesting is what
+makes them not a `ModelViewSet`. Six hand-written `@extend_schema` blocks fixed it, and they
+carry reasoning the endpoint table never could: what `degraded` and `widened` mean, why
+`distance_km` and `lender_id` cannot be reconstructed by joining against `/api/listings/`,
+why mark-read takes ids rather than clearing everything.
+
+**`schema.yml` is gitignored, deliberately.** Committing a generated copy would recreate the
+exact failure from entry 67 — a second description of the API that nothing keeps honest.
+The hand-written endpoint table in the README stays, because a reader wants a summary before
+a 1,285-line document, but it now sits above a link to the generated version, which is the
+one that cannot drift.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2265,3 +2316,15 @@ hope.
   independent triggers converging on one notification service — which is now the most
   interesting shape in the codebase. Redraw when the architecture changes, not when it
   becomes wrong.
+- **`get_queryset()` has more callers than the request cycle.** A schema generator, a
+  management command, an admin action and a test all reach it without going through
+  permissions. Assuming an authenticated user was an assumption about the only caller that
+  existed at the time, and it surfaced as a crash the day a second one appeared.
+- **Generated documentation is only as good as what can be introspected — and the
+  interesting endpoints are the least introspectable.** Being an `APIView` over a pydantic
+  response is precisely what made the match endpoint worth documenting and invisible to the
+  generator. Auto-generation covers the boilerplate; the parts a reader actually needs still
+  have to be written.
+- **A guard that production will never execute still needs a comment saying why.** Code with
+  no reachable purpose gets deleted by the next person, including me. "Only reachable during
+  schema generation" is the difference between a guard and noise.

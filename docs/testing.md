@@ -32,10 +32,21 @@ Regenerate with:
 ```bash
 cd backend
 coverage run manage.py test apps
-coverage report                       # overall
-coverage report --omit="mcp_client_demo.py,fill_demo_thread.py,setup_demo_accounts.py,apps/core/management/commands/seed_data.py"
+
+# Overall, gaps only — 100% files collapse into a "N files skipped" line.
+coverage report --skip-covered
+
+# Product only. The exclusion is spelled out rather than hidden in config,
+# so the number and what it leaves out travel together.
+coverage report --skip-covered --omit="mcp_client_demo.py,fill_demo_thread.py,setup_demo_accounts.py,apps/core/management/commands/seed_data.py"
+
 coverage html && start htmlcov/index.html
 ```
+
+| | |
+|---|---|
+| [![overall coverage](screenshots/06-coverage.png)](screenshots/06-coverage.png) | [![product coverage](screenshots/07-coverage-product.png)](screenshots/07-coverage-product.png) |
+| **76% overall** — the HTML report, branch coverage on | **91% product** — 50 files skipped at 100% |
 
 ## Composition
 

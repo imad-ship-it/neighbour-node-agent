@@ -528,8 +528,8 @@ The reasoning, the migration path and what was tested to protect it are in
   follow.
 - Test coverage is **169 backend tests and 16 frontend**, measured with branch coverage:
   **76% overall, 91% on product code** excluding the demo scripts, seed command and MCP
-  demo client. Composition, the known gaps and what coverage does *not* measure are in
-  [docs/testing.md](docs/testing.md). The main remaining gaps are the two provider
+  demo client. Composition, the known gaps, the screenshots behind both figures, and what
+  coverage does *not* measure are in [docs/testing.md](docs/testing.md). The main remaining gaps are the two provider
   `generate()` methods, which need SDK mocking, and frontend rendering — pure logic is
   tested, anything needing a DOM is deliberately out of scope.
 - Real geolocation. The match UI searches from a fixed point matching the seeded data,

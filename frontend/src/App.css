@@ -30,14 +30,12 @@
   gap: 6px;
 }
 
-/* :not(.btn) is load-bearing, not tidiness.
-   "Sign up" is a react-router <Link className="btn btn-sm">, which renders as an
-   <a> inside .site-nav. Without the exclusion, `.site-nav a` (specificity 0-1-1)
-   outranks `.btn` (0-1-0) and overrides the button's own colour and padding — so
-   the label was painted var(--text) on the var(--accent) fill. In dark mode that
-   is #9ca3af on #c084fc, a contrast ratio of roughly 1.04:1, i.e. invisible.
-   Anything styled as a button inside the nav must keep its button styling. */
-.site-nav a:not(.btn) {
+/* Every nav item shares one look, buttons included — so "Sign up" sits in the row
+   rather than shouting at the end of it, and "Browse" no longer sets itself apart
+   just for being the page you are on.
+   NavLink still applies .active exactly as before; it simply is not painted
+   differently any more. Nothing here changes behaviour. */
+.site-nav a {
   font-size: 15px;
   color: var(--text);
   text-decoration: none;
@@ -45,13 +43,33 @@
   border-radius: 7px;
   transition: background 0.15s, color 0.15s;
 }
-.site-nav a:not(.btn):hover {
+.site-nav a:hover {
   color: var(--text-h);
   background: var(--social-bg);
 }
-.site-nav a:not(.btn).active {
+
+/* "Sign up" is a <Link className="btn btn-sm">, so it arrives carrying the filled
+   accent button styling. Restated here as the tinted accent pill instead.
+   Specificity matters and is deliberate: this is 0-2-1, which outranks both `.btn`
+   (0-1-0) and `.btn-sm` (0-1-0), so the button rules lose cleanly rather than by
+   accident. The earlier bug was the same collision going the other way — nav
+   styling silently overrode the button and painted var(--text) on var(--accent),
+   about 1.04:1 in dark mode, i.e. invisible. */
+.site-nav a.btn {
+  font-size: 15px;
+  font-weight: 500;
   color: var(--accent);
   background: var(--accent-bg);
+  border-color: transparent;
+  padding: 7px 12px;
+  border-radius: 7px;
+}
+/* 0-3-1, so it beats `.btn:hover:not(:disabled)` (0-3-0) and its brightness
+   filter, which would otherwise wash out a tinted background. */
+.site-nav a.btn:hover {
+  color: var(--accent);
+  background: var(--accent-bg);
+  filter: none;
 }
 
 .site-nav .who {

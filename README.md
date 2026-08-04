@@ -183,7 +183,7 @@ neighbour-node-agent/
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
-│       ├── api/                # axios client + in-memory token store
+│       ├── api/                # axios client + sessionStorage token store
 │       ├── context/            # AuthContext
 │       ├── hooks/              # TanStack Query hooks (useListings, useMatch)
 │       ├── pages/              # Login, Signup, Listings, CreateListingForm, Match
@@ -194,6 +194,68 @@ neighbour-node-agent/
 ---
 
 ## Getting started
+
+Two ways in. **Docker is the shorter one** and is how the app is meant to be run;
+the manual setup below is for working on the code.
+
+### Run it with Docker
+
+Prerequisites: Docker Desktop (or Docker Engine + Compose v2). Nothing else —
+no Python, no Node.
+
+```bash
+git clone https://github.com/imad-ship-it/neighbour-node-agent.git
+cd neighbour-node-agent
+cp .env.example .env          # Windows (PowerShell): Copy-Item .env.example .env
+```
+
+Open `.env` and set `SECRET_KEY` to any random string. Generate one with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
+No API keys are needed — both LLM roles default to `stub`.
+
+```bash
+docker compose up --build
+```
+
+Then open **<http://localhost:8080>**. That is the whole application: the React
+bundle, the API, the uploaded photos and the docs all on one origin.
+
+| | |
+|---|---|
+| <http://localhost:8080> | The app |
+| <http://localhost:8080/api/docs/> | Swagger UI |
+| <http://localhost:8080/admin/> | Django admin |
+
+The first build takes a few minutes (it pulls four base images, then runs `pip
+install` and `npm ci`). Later builds hit the layer cache.
+
+**It seeds itself.** On a fresh volume the entrypoint migrates, creates twelve
+neighbours and 48 listings, then adds two accounts for clicking through:
+
+| Account | Password | Owns |
+|---|---|---|
+| `demo-lender` | `demo-pass-1234` | One cordless drill, ~1.4 km from where the match UI searches |
+| `demo-borrower` | `demo-pass-1234` | Nothing — so "message the lender" appears on every card |
+
+Suggested first query: *"a cordless drill to put up some shelves"*.
+
+Seeding is skipped on every subsequent start, so restarting never duplicates
+data and never resets an account you created.
+
+Useful commands:
+
+```bash
+docker compose logs -f backend     # follow the API logs
+docker compose exec backend python manage.py test    # run the suite in the container
+docker compose down                # stop, keep the data
+docker compose down -v             # stop and delete the database, photos and cache
+```
+
+### Working on the code directly
 
 ### Prerequisites
 Python 3.12+, Node 20+, Git.
@@ -256,18 +318,21 @@ Run both servers at once (two terminals). The React app calls the API at
 
 With the defaults, the app runs entirely on the stub provider — no keys, no cost.
 
-> **Both live providers work.** Switching a role off `stub` needs an API key and the
-> client library, which are deliberately **not** in `requirements.txt` so a stub-only
-> clone stays dependency-free and costs nothing:
+> **Both live providers work.** Switching a role off `stub` needs only an API key —
+> `anthropic` and `openai` (DeepSeek speaks the OpenAI-compatible API) are both in
+> `requirements.txt`.
 >
-> ```bash
-> pip install anthropic   # for EXTRACTION_PROVIDER=anthropic
-> pip install openai      # for MATCHING_PROVIDER=deepseek (OpenAI-compatible API)
-> ```
+> They were previously left out on purpose, to keep a stub-only clone dependency-free.
+> Containerising killed that idea: both imports are lazy, sitting inside the provider's
+> `__init__`, so a clean `pip install -r requirements.txt` produced an image that booted
+> happily, passed nothing but stub tests, and then raised `ModuleNotFoundError` the first
+> time anyone switched a provider. A dependency you need in order to run a documented
+> configuration belongs in the requirements file. Two SDKs is a cheap price for the
+> feature working when it's turned on.
 >
 > Costs are small but not zero: roughly **$0.0023** per photo extraction and a fraction
-> of a cent per match. Note the result cache is per-process (see below), so a fresh
-> script run re-pays for the same photo.
+> of a cent per match. Under Docker the result cache is Redis-backed and survives a
+> restart, so a warmed photo stays warm.
 
 ---
 
@@ -309,9 +374,11 @@ Two knobs, both matched to the tier:
 That lands at roughly **$0.0023 per extraction** (~1,800 input / ~100 output tokens), about a
 fifth of the frontier-tier cost.
 
-> The 24-hour SHA-256 result cache is **per process**. With no `CACHES` block configured,
-> Django uses `LocMemCache`, which lives in memory and dies with the process — so it saves
-> repeat calls inside a running server, but a fresh script run re-pays for the same photo.
+> The 24-hour SHA-256 result cache is **Redis-backed under Docker**, and survives both a
+> worker restart and a full `docker compose restart` — a cache warmed the day before is
+> still warm. Without `REDIS_URL` set (a bare `runserver`) it falls back to `LocMemCache`,
+> which is per-process and dies with the process, so a fresh script run re-pays for the
+> same photo.
 
 **Matching → DeepSeek (`deepseek-chat`).** This role is text-only — free text in, a
 structured `MatchQuery` out, then ranking with Markdown explanations. It is structured
@@ -529,8 +596,10 @@ rather than assumed:
 1. The notification collapse filter uses a JSONField key lookup that compiles to
    SQLite's `json_extract()`; Postgres uses `jsonb` operators with slightly
    different semantics.
-2. Extraction results are cached in `LocMemCache`, which is **per-process**. A
-   second worker halves the hit rate, and every miss is a paid vision call.
+2. ~~Extraction results are cached in `LocMemCache`, which is per-process.~~
+   **Resolved.** Redis is a service in `docker-compose.yml` with its own volume,
+   so the cache is shared across workers and survives a restart. The worker count
+   stayed at one for the SQLite write path, not for the cache.
 
 The reasoning, the migration path and what was tested to protect it are in
 [docs/decisions.md](docs/decisions.md).
@@ -548,10 +617,9 @@ The reasoning, the migration path and what was tested to protect it are in
 
 ## Known limitations & next steps
 
-- Messaging and notifications are models + migrations only — no API, no UI. Bookmarks is
-  the built-out version of that same join-row shape, and
-  [docs/api-conventions.md](docs/api-conventions.md) is the checklist those two should
-  follow.
+- Real geolocation is still fixed-point (below), and the frontend has no token-refresh
+  flow — an eight-hour access token papers over it, but a session longer than that ends
+  in a 401 rather than a refresh.
 - Test coverage is **169 backend tests and 16 frontend**, measured with branch coverage:
   **76% overall, 91% on product code** excluding the demo scripts, seed command and MCP
   demo client. Composition, the known gaps, the screenshots behind both figures, and what
@@ -560,6 +628,10 @@ The reasoning, the migration path and what was tested to protect it are in
   tested, anything needing a DOM is deliberately out of scope.
 - Real geolocation. The match UI searches from a fixed point matching the seeded data,
   because browser geolocation would put a user nowhere near it.
-- Persistent result cache. `LocMemCache` dies with the process, so the 24h extraction
-  cache only helps inside a running server.
-- Postgres, Docker, deployment.
+- Postgres. Deferred deliberately for a single-node deployment — the reasoning and the
+  two things that would have to change are in [docs/decisions.md](docs/decisions.md).
+- Hosting. The stack is containerised and runs locally on `docker compose up`; putting it
+  on a public host is not done.
+- One open advisory, `react-router` GHSA-qwww-vcr4-c8h2. It describes an RSC-mode
+  vulnerability in a mode this SPA does not run; the four checks behind that conclusion
+  are written up in [docs/decisions.md](docs/decisions.md).

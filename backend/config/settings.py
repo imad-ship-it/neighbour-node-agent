@@ -30,7 +30,30 @@ SECRET_KEY = config("SECRET_KEY")
 DEBUG = config("DEBUG", default=False, cast=bool)
 
 
-ALLOWED_HOSTS = []
+# With DEBUG=False the permissive defaults are gone: Django refuses every request
+# whose Host header isn't listed here, and rejects POSTs whose Origin isn't
+# trusted. Both are comma-separated in the environment so the container can be
+# pointed at a new hostname without a rebuild.
+#
+# `localhost` and `127.0.0.1` are not interchangeable to Django — it matches the
+# Host header as a literal string — so both are in the default.
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in config("ALLOWED_HOSTS", default="localhost,127.0.0.1").split(",")
+    if h.strip()
+]
+
+# Must include the scheme, unlike ALLOWED_HOSTS. These are the origins the admin
+# login and the DRF browsable API are allowed to be POSTed from; behind nginx the
+# browser's origin is the *proxy's* port, not the backend's.
+CSRF_TRUSTED_ORIGINS = [
+    o.strip()
+    for o in config(
+        "CSRF_TRUSTED_ORIGINS",
+        default="http://localhost:8080,http://127.0.0.1:8080",
+    ).split(",")
+    if o.strip()
+]
 
 
 # Application definition
@@ -44,6 +67,10 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    # Ships the Swagger UI JS/CSS as a Python package instead of loading it from
+    # unpkg.com at page load. Without it /api/docs/ is a blank page whenever the
+    # room's wifi is down — which is exactly when it gets opened.
+    "drf_spectacular_sidecar",
     "corsheaders",
     "apps.users",
     "apps.listings",
@@ -87,10 +114,16 @@ SPECTACULAR_SETTINGS = {
     # listings_list rather than api_listings_list.
     "SCHEMA_PATH_PREFIX": "/api",
     "COMPONENT_SPLIT_REQUEST": True,
+    # Serve the Swagger UI assets from the sidecar package via staticfiles rather
+    # than the default unpkg.com CDN. Offline-proof, and versioned with the app.
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
 }
 
-# SimpleJWT defaults to a 5-minute access token. The frontend holds it in memory
-# and has no refresh flow yet, so a short life logs the user out mid-session.
+# SimpleJWT defaults to a 5-minute access token. The frontend keeps it in
+# sessionStorage and has no refresh flow yet, so a short life logs the user out
+# mid-session.
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
@@ -105,8 +138,13 @@ ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
 DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", default="")
 
 
+# Only used by the local Vite dev server, which runs on a different port and so
+# is genuinely cross-origin. In the container the frontend and the API are both
+# behind nginx on one origin, so no preflight ever happens and this list is inert.
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
+    o.strip()
+    for o in config("CORS_ALLOWED_ORIGINS", default="http://localhost:5173").split(",")
+    if o.strip()
 ]
 
 
@@ -114,6 +152,11 @@ AUTH_USER_MODEL = "users.User"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Directly after SecurityMiddleware and before everything else, per WhiteNoise's
+    # docs. With DEBUG=False Django's staticfiles view switches itself off, so
+    # without this the admin, the DRF browsable API and /api/docs/ all render as
+    # unstyled HTML — the failure looks like a broken app, not a missing setting.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -146,12 +189,58 @@ WSGI_APPLICATION = "config.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# DB_PATH lets the container put the file on a mounted volume instead of inside
+# the image, where a rebuild would discard it.
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": config("DB_PATH", default=str(BASE_DIR / "db.sqlite3")),
+        "OPTIONS": {
+            # WAL is a property of the *database file*, so one PRAGMA would in
+            # principle be enough — but it survives only as long as nobody
+            # recreates the file, and the volume gets wiped often enough during
+            # setup that "someone forgot to re-run it" is a real failure mode.
+            # Issuing it as an init_command makes every new connection assert it,
+            # which costs nothing when it's already set.
+            #
+            # Why it matters here: the default rollback journal takes an exclusive
+            # lock for the whole write, so a slow write blocks every reader. WAL
+            # lets readers carry on against the last committed snapshot. With one
+            # gunicorn worker there is one writer by construction, which is the
+            # configuration WAL handles best.
+            #
+            # busy_timeout is the companion setting people leave out: without it a
+            # contended write raises "database is locked" immediately instead of
+            # waiting. 5s is far longer than any write here takes.
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "timeout": 5,
+        },
     }
 }
+
+# Extraction results are cached on the SHA-256 of the image bytes plus the
+# description — see apps/listings/services.py. LocMemCache is per-process and
+# dies with the process; Redis is shared and, with a volume behind it, survives a
+# container restart. That is the property that matters for a demo: a cache warmed
+# the day before is still warm the next morning, so the walkthrough doesn't depend
+# on a live vision call going through on the room's wifi.
+#
+# Falling back to LocMemCache when REDIS_URL is unset keeps a bare `runserver`
+# working with no Redis installed.
+REDIS_URL = config("REDIS_URL", default="")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
+    }
 
 
 # Password validation
@@ -207,5 +296,27 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# Where `collectstatic` writes, and where WhiteNoise reads from. Inside the image
+# rather than on a volume — these files are build output, rebuilt from the
+# installed packages every time, so there is nothing here worth persisting.
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+STORAGES = {
+    # Uploaded photos. Plain filesystem storage, pointed at the media volume.
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    # Hashes each file's contents into its name and writes a manifest, so
+    # collected assets can be served with a far-future cache header and still
+    # change the instant a deploy does. The compression step pre-builds gzip and
+    # brotli copies at build time rather than per request.
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# On a volume, unlike STATIC_ROOT: these are uploads, and the only copy is the one
+# on disk. Baked into the image they would be discarded by every rebuild, and the
+# seeded listings would point at photos that no longer exist.
+MEDIA_ROOT = Path(config("MEDIA_ROOT", default=str(BASE_DIR / "media")))

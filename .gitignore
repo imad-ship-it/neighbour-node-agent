@@ -5,7 +5,15 @@ node_modules/
 .vscode/
 
 backend/db.sqlite3
+# WAL leaves a write-ahead log and a shared-memory index beside the database.
+# They are not covered by the pattern above and are pure local state.
+backend/db.sqlite3-wal
+backend/db.sqlite3-shm
 backend/media/
+
+# collectstatic output: copies of files that already live in the installed
+# packages, plus hashed duplicates of each. Rebuilt by the image build.
+backend/staticfiles/
 
 # Coverage artefacts: a binary data file and a generated HTML tree. Both are
 # rebuilt by `coverage run` / `coverage html` and neither is worth reviewing.

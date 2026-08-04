@@ -1,0 +1,16 @@
+# Reinstalled inside the image by `npm ci`. Copying a Windows-built tree in would
+# be slow and can carry platform-specific binaries the Linux stage can't run.
+node_modules/
+
+# Build output — the image builds its own. A stale local dist/ copied in would be
+# overwritten anyway, but it makes the build context needlessly large.
+dist/
+
+# Vite inlines env vars at build time, so a local .env here would end up baked
+# into the shipped bundle. The build arg in the Dockerfile is the only input.
+.env
+.env.*
+!.env.example
+
+.git/
+*.log

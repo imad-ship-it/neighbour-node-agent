@@ -41,7 +41,10 @@ PyJWT==2.13.0
 python-decouple==3.8
 python-discovery==1.5.0
 python-multipart==0.0.32
-pywin32==312
+# Windows-only, and nothing in this project imports it — it arrived as a
+# transitive pin from a local install. Unmarked it hard-fails `pip install` inside
+# the Linux container, which is a confusing way to lose ten minutes.
+pywin32==312; sys_platform == "win32"
 PyYAML==6.0.3
 referencing==0.37.0
 rpds-py==2026.6.3
@@ -59,3 +62,29 @@ coverage==7.15.3
 drf-spectacular==0.30.0
 inflection==0.5.1
 uritemplate==4.2.0
+
+# Serving in a container.
+gunicorn==26.0.0
+# Lets Django serve its own collected static files with correct cache headers, so
+# the admin, the browsable API and /api/docs/ stay styled under DEBUG=False
+# without putting nginx in front of the backend.
+whitenoise[brotli]==6.12.0
+# Swagger UI assets as a package instead of a CDN fetch — /api/docs/ then works
+# with no internet.
+drf-spectacular-sidecar==2026.8.1
+# Client for Django's built-in RedisCache backend (not django-redis).
+redis==8.1.0
+
+# LLM provider SDKs.
+#
+# These were installed in the local virtualenv but never added here, which went
+# unnoticed because both imports are lazy — they sit inside the provider's
+# __init__, so the app boots and every test passes as long as both roles are on
+# `stub`. The container is what exposed it: a clean `pip install -r` produced an
+# image where switching EXTRACTION_PROVIDER to anthropic raises
+# ModuleNotFoundError at the first extraction, mid-demo.
+#
+# openai is not a typo — DeepSeek exposes an OpenAI-compatible API and
+# deepseek_provider.py talks to it with `from openai import OpenAI`.
+anthropic==0.120.2
+openai==2.51.0

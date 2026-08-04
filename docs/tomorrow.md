@@ -1,0 +1,115 @@
+# Tomorrow — bug fixes only
+
+Written at the end of the containerisation day. Everything here was noticed
+while doing something else and deliberately not fixed, so that the morning is
+a short list rather than an exploration.
+
+Ordered by what a person watching the demo would notice first.
+
+---
+
+## 1. Most seeded listings show a broken thumbnail  ← do this one first
+
+**What.** 43 of the 51 listings in a freshly seeded database point at
+`listings/2026/07/drill.jpg`, which does not exist and never has. Only photos
+uploaded through the app resolve.
+
+**Why it happens.** `seed_data.py` sets `image = SAMPLE_IMAGE` — a hardcoded
+path — on ~90% of the rows it creates. `ImageField` stores a *path* and
+`bulk_create` does not check that anything is there. `media/` is gitignored, so
+on any clone, and in any container, the file is absent.
+
+The comment in `seed_data.py` already says this and calls the effect "a broken
+thumbnail in the frontend". That was fair when the seed was for local API work.
+It is not fair now that the container is the demo.
+
+**Why it is not a volume bug.** The media volume is configured correctly and
+verified: an uploaded photo persists across `docker compose down` and is served
+back by nginx as `image/png`. These rows point at a file that was never written.
+
+**Options, cheapest first.**
+- Generate a placeholder at seed time with Pillow (already a dependency) and
+  save it through the `ImageField`, so the file lands on the volume wherever the
+  seed runs. No binary in the repo, works on every fresh `up`. **Recommended.**
+- Commit one small sample JPEG and have the entrypoint copy it into `MEDIA_ROOT`
+  before seeding. Simpler, but puts a binary in git.
+- Set `image = ""` on seeded rows. Honest, and makes `no_photo` fire on
+  everything — which would drown the trust-check signal the awkward fixtures
+  exist to demonstrate. Not recommended.
+
+Estimated 10–15 minutes for the first option.
+
+---
+
+## 2. Confirm the two scroll fixes in the production build  ← needs a browser
+
+**What.** Yesterday's two scroll fixes — long threads landing at the newest
+message on open, and the related scroll behaviour — have **not** been verified
+against the containerised build. Every check run today was HTTP-level.
+
+**Why it can't be ticked off from the API.** Minification, a real static server,
+and different asset timing can all change when layout settles relative to when a
+scroll effect fires. That class of bug does not appear in a status code.
+
+**How.** `docker compose up -d`, open <http://localhost:8080>, log in as
+`demo-borrower` / `demo-pass-1234`, open the thread seeded by the check script,
+and confirm it lands at the newest message on open and after a reload. Ten
+minutes, but it does need eyes on a screen.
+
+---
+
+## 3. `CACHE_TTL` is 24h and the demo window may be wider
+
+**What.** `apps/listings/services.py:16` — `CACHE_TTL = 60 * 60 * 24`.
+
+**Why it matters.** Redis persistence means a warmed cache survives restarts,
+which is the property that was wanted. It does not survive the TTL. A cache
+warmed Thursday afternoon is cold by Friday afternoon, and the warming would
+have to be redone on the morning.
+
+**Fix.** Make it configurable — `CACHE_TTL = config("CACHE_TTL", default=86400,
+cast=int)` — and set it to 72h in compose for the demo period. Two lines.
+
+---
+
+## 4. Pre-existing lint error in `AuthContext.jsx`
+
+```
+src/context/AuthContext.jsx
+  84:17  error  Fast refresh only works when a file only exports components
+         react-refresh/only-export-components
+```
+
+`npm run lint` exits non-zero because of it. Pre-existing — confirmed unrelated
+to any change made today. It is a dev-experience rule, not a correctness one, so
+it breaks nothing at runtime, but it means lint cannot be used as a gate until
+it is resolved. Fix by moving the non-component export into its own module.
+
+---
+
+## 5. Suspicious pins in `requirements.txt`
+
+`httpcore2`, `httpx2`, `mcp-types`, `python-discovery` sit alongside the normal
+`httpcore` / `httpx` / `mcp`. They install and nothing imports the duplicates
+directly, so they look like they arrived from a bad resolve rather than a
+decision. Worth ten minutes with `pipdeptree` to see whether anything actually
+depends on them, and dropping them if not — every unexplained pin is something
+the next person has to reason about.
+
+Not urgent: they build fine in the image.
+
+---
+
+## Not bugs — deliberate, already written up
+
+Listed so they don't get "fixed" by accident:
+
+- **SQLite in production, one gunicorn worker.** Reasoning in
+  `docs/decisions.md`. Redis removed the cache objection to multiple workers;
+  the worker count stayed at one for the SQLite write path.
+- **The open `react-router` advisory.** GHSA-qwww-vcr4-c8h2 describes an
+  RSC-mode issue in a mode this SPA does not run. Four independent checks in
+  `docs/decisions.md`. `npm audit fix --force` would *downgrade* to 7.11.0 to
+  escape a bug that cannot be reached — do not run it.
+- **`schema.yml` is gitignored.** A committed copy is a second description of
+  the API that nothing keeps honest.

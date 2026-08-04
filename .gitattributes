@@ -1,0 +1,15 @@
+# Shell scripts must keep LF endings even when checked out on Windows. A CRLF
+# entrypoint.sh makes the Linux kernel look for an interpreter literally named
+# "/bin/sh\r", and the container dies with "no such file or directory" naming a
+# file that is obviously present. The Dockerfile strips CR as a second line of
+# defence; this stops the problem at checkout.
+*.sh text eol=lf
+
+# Same reasoning for the files the container build reads. .dockerignore matters
+# more than it looks: a trailing CR becomes part of the pattern, so "venv/\r"
+# matches nothing and the ignore silently stops working.
+Dockerfile text eol=lf
+*.conf text eol=lf
+entrypoint.sh text eol=lf
+.dockerignore text eol=lf
+docker-compose.yml text eol=lf

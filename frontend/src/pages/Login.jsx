@@ -8,17 +8,21 @@ function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
 
   async function handleSubmit(event) {
     event.preventDefault()
     setError(null)
+    setSubmitting(true)
     try {
       await login(username, password)
       navigate('/')
     } catch (err) {
       setError(apiError(err, 'Invalid username or password.'))
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -34,7 +38,11 @@ function Login() {
         <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
       </label>
       {error && <p className="form-error">{error}</p>}
-      <Button type="submit">Log in</Button>
+      {/* Disabled while in flight: the request is a round trip to the API, and
+          without this the button stays live long enough to submit twice. */}
+      <Button type="submit" disabled={submitting}>
+        {submitting ? 'Logging in…' : 'Log in'}
+      </Button>
       <p className="form-alt">
         No account? <Link to="/signup">Sign up</Link>
       </p>

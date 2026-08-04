@@ -2000,6 +2000,75 @@ one that cannot drift.
 
 ---
 
+### 69. What the container knew that the tests didn't
+
+**Prompt:** containerise it. Backend image with gunicorn, frontend built and served by
+nginx, Redis for the cache, volumes for the database and the uploads, an entrypoint that
+migrates and seeds. One worker, written down.
+
+**Result.** `docker compose up --build` and the whole app answers on one origin at
+`localhost:8080`. 169 backend tests pass inside the image. But the interesting part is
+that **169 passing tests and a working dev server had been hiding four things**, and the
+container found all four in an afternoon.
+
+**The requirements file was lying.** `anthropic` and `openai` were installed in the local
+virtualenv and had never been added to `requirements.txt`. The README even claimed this was
+*deliberate* — keep a stub-only clone dependency-free. It read as a decision. It was an
+omission that had been rationalised into one.
+
+Nothing caught it because both imports are **lazy**, sitting inside the provider's
+`__init__`. On `stub` — the default, and what the whole suite runs on — neither line ever
+executes. The app boots, every test passes, and the failure waits for the exact moment
+someone sets `EXTRACTION_PROVIDER=anthropic` to show a live LLM call to somebody. In the
+container it surfaced as four test errors and one honest message: `ModuleNotFoundError: No
+module named 'anthropic'`.
+
+A clean `pip install -r requirements.txt` into an empty image is the only thing that
+distinguishes "this project's dependencies" from "what happens to be on my laptop". A
+virtualenv you have been adding to for six weeks cannot tell you the difference.
+
+**`DEBUG=False` silently unplugs the photos.** Django only mounts the media route under
+`if settings.DEBUG` — which is correct, and which means uploads are served by *nothing* in
+production. The brief anticipated the volume; the volume is necessary and not sufficient.
+Without nginx also serving `/media/` off that shared volume, the demo shows a full
+database, a working app, and every listing photo broken. The failure is invisible in the
+logs because nothing failed: Django was never asked.
+
+The same setting takes the admin, the browsable API and `/api/docs/` down to unstyled HTML
+— which whitenoise fixes, and which is genuinely ten minutes now versus discovering it on a
+projector. Worth adding: Swagger UI was being fetched from **unpkg.com** at page load, so
+the docs page would have been blank on bad wifi no matter how correct the static config
+was. `drf-spectacular-sidecar` makes it local.
+
+**The seed ran, and produced one listing.** The entrypoint had to be idempotent, so I wrote
+a test that ran it three times against a scratch database and compared counts. Stable
+across all three runs — and wrong on every one of them. 1 listing, not 48.
+
+`seed_data` assigns each listing a random lender from existing users; `setup_demo_accounts`
+deletes every listing owned by either demo account. With only those two accounts in the
+database, the entire seed was assigned to them and deleted seconds later. **Idempotent and
+correct are independent properties**, and a test that only asserts "the same thing happens
+each time" will happily certify the same wrong thing forever. Fixed by seeding first, with
+filler neighbours to own the rows, and creating the demo accounts afterwards.
+
+**Two smaller ones, both platform assumptions.** `pywin32==312` sat in `requirements.txt`,
+imported by nothing, and hard-fails `pip install` on Linux — an environment marker
+(`; sys_platform == "win32"`) is the fix. And the entrypoint's "is the database empty"
+check ran `manage.py shell -c`, which since Django 5.2 prints *"19 objects imported
+automatically"* on stdout before the command's own output. Captured naively, the variable
+never equals `False`, the seed step never runs, and a fresh volume stays empty with no
+error anywhere. `--no-imports -v 0` is not tidiness; it is the difference between a seeded
+demo and an empty one.
+
+**What this actually was.** Not packaging. The container is the first environment that
+didn't inherit six weeks of accumulated local state — different Python, different paths,
+different filesystem, no virtualenv, no `.env` lying around, `DEBUG` genuinely off. Every
+assumption the project had quietly absorbed had to be either declared or discovered. The
+brief called this "the real test", which turned out to be exactly the right word: it
+behaves like a test suite for the things test suites can't see.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2328,3 +2397,21 @@ one that cannot drift.
 - **A guard that production will never execute still needs a comment saying why.** Code with
   no reachable purpose gets deleted by the next person, including me. "Only reachable during
   schema generation" is the difference between a guard and noise.
+- **A lazy import is a dependency the test suite cannot see.** `anthropic` and `openai` were
+  missing from `requirements.txt` for weeks behind two imports that only run when a provider
+  is switched off `stub`. Nothing that defers its import is covered by "it starts up fine".
+- **Idempotent and correct are independent.** Three runs of the entrypoint produced
+  identical databases, and all three were wrong. Asserting stability without asserting the
+  value just guarantees the same mistake repeats reliably.
+- **The environment is a dependency you never wrote down.** Six weeks of `pip install` into
+  one virtualenv is not a manifest. A clean install into an empty image is the only thing
+  that can tell you which is which.
+- **`DEBUG=False` removes behaviour, it doesn't just harden it.** Static files and the media
+  route both switch off. Nothing errors; things are simply no longer served, which reads as
+  a broken app rather than a missing setting.
+- **A rationalised omission looks exactly like a decision.** The README explained why the
+  LLM SDKs were deliberately excluded from requirements. They weren't deliberate — they were
+  forgotten, and the explanation was written afterwards. Prose is not evidence.
+- **An advisory you can't dismiss in one sentence needs four.** "Doesn't apply to us" is
+  worthless in a scan; the version, the mode it affects, the APIs actually used, and the
+  auth mechanism are what make it checkable by someone who isn't me.

@@ -1,0 +1,100 @@
+# The demo stack: nginx serving the built React bundle and proxying to gunicorn,
+# with Redis behind the extraction cache.
+#
+#   cp .env.example .env   # fill in SECRET_KEY, and keys only if you want live LLMs
+#   docker compose up --build
+#   open http://localhost:8080
+#
+# Only the frontend publishes a port. The API is reachable at /api on that same
+# port through nginx, which is exactly how the browser reaches it — so there is no
+# second origin, and no configuration that only works because of a port mapping.
+
+services:
+  redis:
+    image: redis:8-alpine
+    # appendonly writes every mutation to a log rather than relying on the
+    # periodic snapshot, so a restart loses at most a second of cache rather than
+    # up to an hour of it. Without this the volume below still exists but the
+    # thing it is meant to protect — a cache warmed the day before — can vanish.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      # Explicit, not inherited from .env: these describe where things live
+      # *inside the container*, and are not a developer's choice to make.
+      DEBUG: "False"
+      DB_PATH: /data/db.sqlite3
+      MEDIA_ROOT: /app/media
+      REDIS_URL: redis://redis:6379/0
+      # The browser talks to localhost:8080, and nginx forwards that Host header
+      # unchanged — so this is the host Django sees, not `backend`.
+      ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      CSRF_TRUSTED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      GUNICORN_WORKERS: "1"
+    volumes:
+      # Two volumes, and both are load-bearing.
+      #
+      # The database: without it every `docker compose up --build` starts from an
+      # empty schema and re-seeds, so any account created during a walkthrough is
+      # gone.
+      - db-data:/data
+      # The uploads: this is the one that gets forgotten, because forgetting it
+      # looks fine at first. The database survives on its own volume, so the
+      # listings are all still there — but the image *files* they point at were
+      # inside the old container layer, so every photo renders broken while the
+      # app itself behaves perfectly.
+      - media-data:/app/media
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Hits a real Django route through the WSGI stack. A TCP port check would
+      # pass while the app was still failing every request.
+      #
+      # /api/docs/ and not /api/schema/: the docs page is a small template render,
+      # whereas the schema endpoint introspects every serializer and viewset to
+      # rebuild the OpenAPI document — real work to repeat every few seconds for
+      # the life of the container.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/docs/"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      # Generous: the first start runs migrations and seeds ~50 listings before
+      # gunicorn binds, and a short start_period would mark it unhealthy for
+      # doing exactly what it is supposed to do.
+      start_period: 90s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the bundle at build time — see frontend/Dockerfile.
+        VITE_API_BASE_URL: /api
+    ports:
+      - "8080:80"
+    volumes:
+      # Read-only, and deliberately so: nginx serves these bytes but only Django
+      # should ever write them.
+      - media-data:/var/www/media:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  media-data:
+  redis-data:

@@ -1,0 +1,24 @@
+# A Windows virtualenv copied into a Linux image is both useless and large, and
+# it would shadow the site-packages pip just installed.
+venv/
+__pycache__/
+*.pyc
+
+# Secrets. These must arrive from the environment at run time — an image with a
+# key baked in leaks it to anyone who can pull it.
+.env
+
+# Local state. The container's copies live on volumes; copying these in would
+# bake one developer's database and uploads into the image, and the build-time
+# copy would then sit *under* the volume mount doing nothing but confusing people.
+db.sqlite3
+media/
+
+# Test and coverage artefacts.
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# Generated at request time from the code; see .gitignore.
+schema.yml

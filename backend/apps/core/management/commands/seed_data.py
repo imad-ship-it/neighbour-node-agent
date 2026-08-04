@@ -59,6 +59,16 @@ class Command(BaseCommand):
             action="store_true",
             help="Delete existing listings before seeding (lets you reseed).",
         )
+        parser.add_argument(
+            "--users",
+            type=int,
+            default=0,
+            help=(
+                "Ensure at least this many users exist, creating filler "
+                "neighbours as needed. Default 0 — require users to already "
+                "exist, as before."
+            ),
+        )
 
     def handle(self, *args, **options):
         count = options["count"]
@@ -74,17 +84,48 @@ class Command(BaseCommand):
             )
             return
 
+        fake = Faker()
+
+        # Fill the neighbourhood out to --users before assigning owners.
+        #
+        # This exists because of how the container seeds a fresh volume. Listings
+        # are handed to a random existing user, so with only the two walkthrough
+        # accounts present every listing lands on demo-lender or demo-borrower —
+        # and setup_demo_accounts then deletes the listings owned by both, taking
+        # the whole seed with it. Filler neighbours give the listings somewhere
+        # else to live.
+        #
+        # Guarded on the current count rather than blindly creating N, so
+        # re-running against a populated database adds nobody.
+        wanted = options["users"]
+        existing = User.objects.count()
+        if wanted > existing:
+            new_users = []
+            seen = set(User.objects.values_list("username", flat=True))
+            while len(new_users) < wanted - existing:
+                username = fake.user_name()
+                # Faker's pool is small enough to repeat within a few dozen draws,
+                # and username is unique — a collision would abort the whole seed.
+                if username in seen:
+                    continue
+                seen.add(username)
+                new_users.append(User(username=username))
+            # These accounts are never logged into; they exist to own listings.
+            # An unusable password hash is the correct state for that, and is what
+            # Django gives a user whose password was never set.
+            User.objects.bulk_create(new_users)
+            self.stdout.write(f"Created {len(new_users)} filler neighbours.")
+
         users = list(User.objects.all())
         if not users:
             self.stdout.write(
                 self.style.ERROR(
                     "No users exist yet. Create one (createsuperuser or the "
-                    "register endpoint) before seeding listings."
+                    "register endpoint) before seeding listings, or pass "
+                    "--users N to have this command create them."
                 )
             )
             return
-
-        fake = Faker()
 
         listings = []
         for _ in range(count):

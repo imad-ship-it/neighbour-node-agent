@@ -151,7 +151,14 @@ class Command(BaseCommand):
                     is_available=True,
                     # A tenth go without, so no_photo stays a minority signal rather
                     # than firing on every row.
-                    image=PENDING_IMAGE if random.random() > 0.1 else "",
+                    # Every random listing gets an image. The no_photo trust rule
+                    # is demonstrated by the dedicated fixture below, which is
+                    # normal in every other respect so the flag identifies its own
+                    # cause. Randomly blanking a tenth of the rows used to add
+                    # variation back when every image pointed at the same fake
+                    # path; now that each listing draws its own card it only makes
+                    # an unpredictable fraction of the grid look empty.
+                    image=PENDING_IMAGE,
                 )
             )
 

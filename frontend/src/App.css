@@ -30,7 +30,14 @@
   gap: 6px;
 }
 
-.site-nav a {
+/* :not(.btn) is load-bearing, not tidiness.
+   "Sign up" is a react-router <Link className="btn btn-sm">, which renders as an
+   <a> inside .site-nav. Without the exclusion, `.site-nav a` (specificity 0-1-1)
+   outranks `.btn` (0-1-0) and overrides the button's own colour and padding — so
+   the label was painted var(--text) on the var(--accent) fill. In dark mode that
+   is #9ca3af on #c084fc, a contrast ratio of roughly 1.04:1, i.e. invisible.
+   Anything styled as a button inside the nav must keep its button styling. */
+.site-nav a:not(.btn) {
   font-size: 15px;
   color: var(--text);
   text-decoration: none;
@@ -38,11 +45,11 @@
   border-radius: 7px;
   transition: background 0.15s, color 0.15s;
 }
-.site-nav a:hover {
+.site-nav a:not(.btn):hover {
   color: var(--text-h);
   background: var(--social-bg);
 }
-.site-nav a.active {
+.site-nav a:not(.btn).active {
   color: var(--accent);
   background: var(--accent-bg);
 }

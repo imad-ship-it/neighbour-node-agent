@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
+from apps.core.services.listing_images import image_for  # noqa: E402
 from apps.listings.models import Listing  # noqa: E402
 from django.contrib.auth import get_user_model  # noqa: E402
 
@@ -62,6 +63,12 @@ listing = Listing.objects.create(
     longitude=LNG,
     is_available=True,
 )
+
+# This is the listing the walkthrough actually opens — the top match for the
+# suggested query — so it is the one card a missing photo would be noticed on.
+# Created without an image above because ImageField needs a saved row first.
+_image = image_for(listing.title, listing.category)
+listing.image.save(_image.name, _image, save=True)
 
 print("\naccounts ready\n")
 print(

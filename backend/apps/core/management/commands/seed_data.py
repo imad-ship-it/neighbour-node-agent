@@ -1,5 +1,6 @@
 import random
 
+from apps.core.services.listing_images import image_for
 from apps.listings.models import Listing
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
@@ -37,11 +38,17 @@ CATEGORY_PRICE_RANGE = {
     "other": (5, 50),
 }
 
-# ImageField stores a *path*, not bytes — bulk_create won't validate that the file
-# exists. media/ is gitignored, so on a fresh clone this points at nothing; that's
-# fine, because trust_check tests whether the field is empty, not whether the file
-# is on disk. Only effect of a missing file is a broken thumbnail in the frontend.
-SAMPLE_IMAGE = "listings/2026/07/drill.jpg"
+# A sentinel, not a real path: it marks the rows that should get an image, and is
+# replaced with a generated file in a second pass after bulk_create.
+#
+# It used to be a literal path — "listings/2026/07/drill.jpg" — which nothing ever
+# wrote. ImageField stores a *path* and bulk_create does not check that the file
+# exists, so 43 of 51 seeded rows looked correct in the database and rendered as
+# broken thumbnails in the browser, on every clone and in every container.
+#
+# The second pass is needed because bulk_create cannot save file content; only
+# FieldFile.save() writes bytes to MEDIA_ROOT.
+PENDING_IMAGE = "__pending__"
 
 
 class Command(BaseCommand):
@@ -144,7 +151,7 @@ class Command(BaseCommand):
                     is_available=True,
                     # A tenth go without, so no_photo stays a minority signal rather
                     # than firing on every row.
-                    image=SAMPLE_IMAGE if random.random() > 0.1 else "",
+                    image=PENDING_IMAGE if random.random() > 0.1 else "",
                 )
             )
 
@@ -165,7 +172,7 @@ class Command(BaseCommand):
                 latitude=34.05,
                 longitude=-118.24,
                 is_available=True,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
             ),
             # Right next door — but in poor condition. The terse description also trips
             # thin_description, and that is deliberate: trust_check has to flag at least
@@ -180,7 +187,7 @@ class Command(BaseCommand):
                 latitude=40.01,
                 longitude=-75.01,
                 is_available=True,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
             ),
             # Cheap and close — but the wrong category entirely.
             Listing(
@@ -193,7 +200,7 @@ class Command(BaseCommand):
                 latitude=40.02,
                 longitude=-75.00,
                 is_available=True,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
             ),
         ]
 
@@ -215,7 +222,7 @@ class Command(BaseCommand):
                 price=120.00,
                 latitude=40.03,
                 longitude=-75.02,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
                 is_available=True,
             ),
             # price wildly outside any sane band for its category
@@ -231,7 +238,7 @@ class Command(BaseCommand):
                 price=1450.00,
                 latitude=40.02,
                 longitude=-75.03,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
                 is_available=True,
             ),
             # nothing was really written
@@ -244,7 +251,7 @@ class Command(BaseCommand):
                 price=6.00,
                 latitude=40.04,
                 longitude=-75.01,
-                image=SAMPLE_IMAGE,
+                image=PENDING_IMAGE,
                 is_available=True,
             ),
             # no photo, everything else clean
@@ -267,6 +274,24 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             Listing.objects.bulk_create(listings + awkward + trust_fixtures)
+
+        # Second pass: turn the PENDING_IMAGE sentinel into an actual file on
+        # disk. This cannot happen during bulk_create — only FieldFile.save()
+        # writes bytes through the storage backend — and it is queried back from
+        # the database rather than using bulk_create's return value, because
+        # primary keys are only populated there on backends that can return rows
+        # from a bulk insert.
+        #
+        # Rows seeded with image="" are left alone on purpose: the "Folding
+        # Camping Table" fixture exists to make trust_check's no_photo rule fire,
+        # and giving everything a picture would silence the flag it demonstrates.
+        drawn = 0
+        for listing in Listing.objects.filter(image=PENDING_IMAGE):
+            content = image_for(listing.title, listing.category)
+            listing.image.save(content.name, content, save=True)
+            drawn += 1
+        if drawn:
+            self.stdout.write(f"Generated {drawn} listing images.")
 
         total = len(listings) + len(awkward) + len(trust_fixtures)
         self.stdout.write(

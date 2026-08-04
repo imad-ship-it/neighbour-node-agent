@@ -8,36 +8,25 @@ Ordered by what a person watching the demo would notice first.
 
 ---
 
-## 1. Most seeded listings show a broken thumbnail  ← do this one first
+## ~~1. Most seeded listings show a broken thumbnail~~ — DONE
 
-**What.** 43 of the 51 listings in a freshly seeded database point at
-`listings/2026/07/drill.jpg`, which does not exist and never has. Only photos
-uploaded through the app resolve.
+Fixed the same day. `seed_data` used to set every image to the hardcoded path
+`listings/2026/07/drill.jpg`, which nothing ever wrote — 43 of 51 rows rendered
+as broken thumbnails on every clone and in every container.
 
-**Why it happens.** `seed_data.py` sets `image = SAMPLE_IMAGE` — a hardcoded
-path — on ~90% of the rows it creates. `ImageField` stores a *path* and
-`bulk_create` does not check that anything is there. `media/` is gitignored, so
-on any clone, and in any container, the file is absent.
+`apps/core/services/listing_images.py` now draws a card per listing with Pillow
+(item name, category, category colour) and saves it through the `ImageField`, so
+real bytes land on the media volume wherever the seed runs. No binary in git, no
+network call, works offline on a fresh `docker compose up`.
 
-The comment in `seed_data.py` already says this and calls the effect "a broken
-thumbnail in the frontend". That was fair when the seed was for local API work.
-It is not fair now that the container is the demo.
+Verified from a clean volume: 48 listings, 40 with images, **0 broken**, all
+served by nginx off the media volume. The four rows without images are
+deliberate — the `no_photo` trust rule needs something to fire on.
 
-**Why it is not a volume bug.** The media volume is configured correctly and
-verified: an uploaded photo persists across `docker compose down` and is served
-back by nginx as `image/png`. These rows point at a file that was never written.
-
-**Options, cheapest first.**
-- Generate a placeholder at seed time with Pillow (already a dependency) and
-  save it through the `ImageField`, so the file lands on the volume wherever the
-  seed runs. No binary in the repo, works on every fresh `up`. **Recommended.**
-- Commit one small sample JPEG and have the entrypoint copy it into `MEDIA_ROOT`
-  before seeding. Simpler, but puts a binary in git.
-- Set `image = ""` on seeded rows. Honest, and makes `no_photo` fire on
-  everything — which would drown the trust-check signal the awkward fixtures
-  exist to demonstrate. Not recommended.
-
-Estimated 10–15 minutes for the first option.
+**Upgrade path if you want real photos later.** Drop `<noun>.jpg` into
+`backend/seed_images/` — `drill.jpg`, `kayak.jpg`, `bike.jpg` — and it is used in
+place of the drawn card automatically. No code change. Use CC0 sources
+(Unsplash, Pexels) if the repo stays public.
 
 ---
 

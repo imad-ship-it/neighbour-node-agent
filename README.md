@@ -574,7 +574,18 @@ the `seed_data` custom management command, never embedded as data migrations:
 ```bash
 python manage.py seed_data --clear        # 40 random + 3 awkward-case listings
 python manage.py seed_data --count 100    # custom volume
+python manage.py seed_data --users 12     # create filler owners first, if none exist
 ```
+
+**Listing images are generated, not shipped.** Each seeded listing gets a card
+drawn at seed time (item name, category, category colour) and saved through the
+`ImageField`, so the file lands in `MEDIA_ROOT` wherever the seed runs — no
+binaries in the repo and no network call. A few rows are left without an image on
+purpose, because `trust_check`'s `no_photo` rule needs something to fire on.
+
+To use real photographs instead, drop `<noun>.jpg` into `backend/seed_images/`
+(`drill.jpg`, `kayak.jpg`, …). Matching listings pick it up automatically with no
+code change; everything else falls back to a drawn card.
 
 Column names and types are verified after each migration with a SQLite browser
 (DB Browser for SQLite / DBeaver).

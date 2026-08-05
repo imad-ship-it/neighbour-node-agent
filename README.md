@@ -26,8 +26,8 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 ## Features
 
 - **Photo → listing extraction** — upload an item photo, get a validated draft listing back
-  (async endpoint; image resize, prompt building, JSON parsing, schema validation, one capped
-  retry, and 24h result caching).
+  (image resize, prompt building, JSON parsing, schema validation, one capped retry, and 24h
+  result caching).
 - **Listings CRUD** — create, browse, update, delete; the lender is always set server-side
   from the authenticated user.
 - **Bookmarks** — save a listing and browse what you've saved. Resource-style
@@ -482,7 +482,11 @@ every private-row feature gets.
 ## How photo extraction works
 
 1. Frontend uploads a multipart image to `POST /api/listings/extract/`.
-2. The async view hands the bytes to the extraction service.
+2. The view hands the bytes to the extraction service. It is deliberately **synchronous** —
+   DRF's `APIView.dispatch` is sync, so an `async def` handler would raise
+   `SynchronousOnlyOperation` in DRF's own authentication before the handler was reached.
+   Under ASGI, Django runs sync views in a threadpool anyway, so the seconds-long vision
+   call still doesn't block the event loop.
 3. The service resizes the image, checks a SHA-256 cache, builds a prompt, and calls the
    role's LLM provider (`stub` by default).
 4. The raw response is fence-stripped, JSON-parsed, and validated against a Pydantic schema

@@ -629,6 +629,10 @@ The reasoning, the migration path and what was tested to protect it are in
 
 ## Known limitations & next steps
 
+[**docs/reflection.md**](docs/reflection.md) has the fuller account: what AI did well, the
+four failures that each needed a different kind of verification to catch, the places the
+log corrects itself, and the limitations below stated with their reasoning.
+
 - Real geolocation is still fixed-point (below), and the frontend has no token-refresh
   flow — an eight-hour access token papers over it, but a session longer than that ends
   in a 401 rather than a refresh.

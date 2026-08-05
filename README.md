@@ -1,9 +1,16 @@
 # Neighbour Node
 
 An AI-assisted neighbourhood lending marketplace. Neighbours list items they're willing to
-lend; others discover what's available nearby. The headline feature: snap a **photo of an
-item** and an LLM drafts a structured listing — title, description, category, condition, and
-a suggested price — which the lender reviews, edits, and posts.
+lend; others discover what's available nearby. Two AI features carry it.
+
+**Listing, from a photo.** Snap a **photo of an item** and an LLM drafts a structured listing
+— title, description, category, condition, and a suggested price — which the lender reviews,
+edits, and posts.
+
+**Finding, from a sentence.** Describe what you need in plain English ("something to help me
+move furniture on saturday") and a matching agent works out what you're asking for, filters
+the catalogue down to what's actually nearby and available, trust-checks each candidate, and
+returns them ranked — each with an explanation of why it fits and what to watch out for.
 
 Built **stub-first**: the entire pipeline runs end-to-end with a deterministic fake LLM and
 **no API keys**, so the project can be cloned and run with zero paid setup.
@@ -62,19 +69,16 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 ```mermaid
 flowchart TD
     subgraph clients ["Clients"]
-        direction LR
         UI["React 19 + Vite<br/>browse · match · saved<br/>messages · bell"]
         MCPC["MCP client<br/>Claude Code · Cursor"]
     end
 
     subgraph entry ["Entry points"]
-        direction LR
         API["Django REST Framework<br/>auth · listings · match · bookmarks<br/>conversations · messages · notifications"]
         MCPS["mcp_server.py<br/>stdio JSON-RPC"]
     end
 
     subgraph svc ["Service layer"]
-        direction LR
         EXT["listings<br/>extract_listing_from_image()"]
         MATCH["matching<br/>understand → retrieve<br/>→ trust → rank"]
         MSG["messaging<br/>participant-scoped threads<br/>per-role unread counts"]
@@ -82,23 +86,15 @@ flowchart TD
     end
 
     subgraph shared ["Deterministic tools — one implementation, two callers"]
-        direction LR
         GEO["geo_search<br/>haversine + radius"]
         TRUST["trust_check<br/>rule-based flags"]
     end
 
     subgraph llm ["LLM providers — resolved per role"]
-        direction LR
         REG["get_provider(role, override)"]
         CLAUDE["Anthropic Claude<br/>vision"]
         DS["DeepSeek<br/>structured"]
         STUB["Stub<br/>no API key"]
-    end
-
-    subgraph store ["Storage"]
-        direction LR
-        DB[("SQLite<br/>WAL · single writer")]
-        TRACE[("TraceLog<br/>every step, every tool call")]
     end
 
     UI -->|"axios + JWT"| API
@@ -115,23 +111,21 @@ flowchart TD
     REG -->|"MATCHING_PROVIDER"| DS
     REG -->|"fallback"| STUB
 
-    MATCH -.-> GEO
+    MATCH -.->|"in-process"| GEO
     MATCH -.-> TRUST
-    MCPS -.-> GEO
+    MCPS -.->|"over stdio"| GEO
     MCPS -.-> TRUST
 
     MSG ==>|"message sent"| NOTIF
     MATCH ==>|"listing ranked"| NOTIF
 
-    GEO --> DB
-    TRUST --> DB
-    MSG --> DB
-    NOTIF --> DB
-
-    EXT --> TRACE
-    MATCH --> TRACE
-    MCPS --> TRACE
+    linkStyle 11,12,13,14 stroke:#54a24b
+    linkStyle 15,16 stroke:#e45756,stroke-width:3px
 ```
+
+Solid arrows are calls, green dotted arrows are deterministic tool invocations, red arrows
+are events. Every service reads and writes the SQLite database; every LLM call and tool call
+writes a `TraceLog` row.
 
 The two AI paths — photo extraction and query matching — both go through one provider
 registry, which resolves each **role** to a model independently. `geo_search` and

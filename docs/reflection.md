@@ -8,7 +8,8 @@ generous.
 The argument, in one line: **every failure below needed a different kind of verification to
 catch it, and the kinds get progressively harder to run.** Reading output caught the first.
 Counting runs caught the second. Deleting a line of code caught the third. Only changing the
-environment caught the fourth. That escalation is the finding — not the individual bugs.
+environment caught the fourth. And nothing whatsoever caught the fifth except a person
+looking at the screen. That escalation is the finding — not the individual bugs.
 
 ---
 
@@ -35,7 +36,7 @@ weakest — as below — where the specification itself was the defect.
 
 ---
 
-## Where it failed, in four escalating cases
+## Where it failed, in five escalating cases
 
 ### 1. Resale pricing — the prompt was wrong, not the parser
 
@@ -145,11 +146,57 @@ nobody can read is a supply-chain problem before anything hostile is involved. A
 carry an inline comment. The check was worth running precisely because it could have gone
 either way, and "verified legitimate" is a different state from "never looked".
 
-**Why this escalates furthest:** the container was the first environment that had not
-inherited six weeks of accumulated local state — different Python, different paths, no
-virtualenv, no stray `.env`, `DEBUG` genuinely off. Every assumption the project had
-quietly absorbed had to be declared or discovered. It behaves like a test suite for the
-things test suites cannot see, and nothing short of a new environment would have run it.
+**Why this escalates:** the container was the first environment that had not inherited six
+weeks of accumulated local state — different Python, different paths, no virtualenv, no stray
+`.env`, `DEBUG` genuinely off. Every assumption the project had quietly absorbed had to be
+declared or discovered. It behaves like a test suite for the things test suites cannot see,
+and nothing short of a new environment would have run it.
+
+### 5. The invisible button — no automated check could see it
+
+The sign-up button's label could not be read. Not "was low contrast" — could not be read.
+
+It is a `<Link className="btn btn-sm">`, so React Router renders an `<a>`, and it sits inside
+`.site-nav`. Two rules competed: `.btn` declaring `color: #fff` at specificity **0-1-0**, and
+`.site-nav a` declaring `color: var(--text)` at **0-1-1**. The nav rule won. In dark mode
+that painted **#9ca3af on #c084fc — a contrast ratio of about 1.04:1**, where 1.0 means the
+two colours are identical. WCAG AA asks 4.5:1.
+
+**Neither file was wrong.** `.btn` is a correct button rule; `.site-nav a` is a correct
+nav-link rule. The defect existed only in their interaction, in a language with no import
+graph, no types and no compiler to observe that one selector had captured an element
+belonging to another. Grepping either file finds nothing, because there is nothing in either
+file to find.
+
+Work through what was available:
+
+| Check | Verdict |
+|---|---|
+| Unit test | Nothing to unit-test — no function, no branch |
+| API / integration test | The stylesheet was served with a 200 and byte-correct content |
+| Clean container rebuild | Renders identically wrong; nothing about it is environmental |
+| Lint | Valid, idiomatic CSS |
+| A person opening the page | **Caught it in about two seconds** |
+
+**Why this escalates furthest.** Case 4's finding was that a different environment sees what
+tests cannot. This goes one rung past it: **rendered appearance is a category of output that
+nothing anywhere in the pipeline inspects.** The container — the instrument that had found
+four bugs the previous day — is blind to it by construction, because the bug is not in the
+environment, the bytes, or the status code. It is in what the bytes look like once a browser
+has drawn them.
+
+That matters more than the bug. AI-assisted development is *systematically* weak here, and
+this is the clearest evidence of it in the project: the CSS was generated, syntactically
+valid, idiomatic, plausible on inspection, and invisible on screen — and every verification
+instrument I had access to agreed it was fine. The failure mode is not "the model wrote bad
+code". It is that **the model and I shared the same blind spot**, and the only thing outside
+it was a human eye on a rendered pixel.
+
+The corollary is a scoping decision, not a resolution: this project has **no frontend
+component or visual-regression tests** (see Known limitations). Contrast checking, snapshot
+diffing or an axe-core pass in CI would each have caught this specific defect. None is
+installed. The honest position is that the gap is now named and measured rather than
+suspected.
 
 ---
 
@@ -177,11 +224,27 @@ as I half-expected: nothing test-shaped appears anywhere in the git history. The
 position is that frontend testing was scoped to pure logic in favour of API coverage, which
 is defensible. Silence about it would not have been.
 
+**The README described the extraction endpoint as async. It is deliberately synchronous.** Not
+drift into vagueness — the opposite of a decision that had been made carefully and written
+down forty lines away, in a docstring explaining that DRF's `APIView.dispatch` is sync, so an
+`async def` handler makes Django run the view on the event loop while DRF's authentication
+still issues sync ORM queries inside it, raising `SynchronousOnlyOperation` before the handler
+is reached. The reasoning was intact and the summary of it was inverted. Two further claims
+were corrected in the same reading pass.
+
+A smaller one worth keeping because it reports nothing when it fails: `.mcp.json` hardcodes
+absolute paths to one machine's virtualenv, so it was added to `.gitignore` — which changed
+nothing, because the file was **already tracked**, and `.gitignore` only governs files git is
+not yet following. It needed `git rm --cached`. The commit that did it is titled *"actually
+untrack .mcp.json"*, which is the honest name for a second attempt.
+
 The generalisation is uncomfortable and worth stating plainly. **Every other claim in this
 project has something that fails when it goes wrong** — a broken import fails a test, a
 wrong status code fails the permission sweep, a missing `lender_id` fails the journey test.
-A stale document fails nothing, ever, so it rots at exactly the rate nobody is looking. Two
-documentation defects turned up in two days, both found by reading rather than running.
+A stale document fails nothing, ever, so it rots at exactly the rate nobody is looking. Four
+documentation defects turned up across three separate reading passes, every one of them found
+by reading and none of them by running. That is now a pattern rather than an incident, and the
+only mitigation that has ever worked is scheduling the read.
 
 ---
 
@@ -202,6 +265,19 @@ documentation defects turned up in two days, both found by reading rather than r
   fails for exactly one reason.
 - **An instruction followed sometimes is indistinguishable from one that works.** Single
   runs establish nothing about non-deterministic systems, in either direction.
+- **Some output has no verifier but a person.** A 1.04:1 contrast ratio passes every test,
+  every lint and every container rebuild, because the bytes are correct and the status is 200.
+  Where the output is a rendered pixel, the instrument is an eye — and that is exactly the
+  blind spot AI-assisted work and I had in common.
+- **A defect can live in the interaction of two correct files.** `.btn` and `.site-nav a` were
+  each right. CSS has no import graph in which their collision is visible, so grepping either
+  one finds nothing.
+- **A documented cost is not a standing decision.** The broken seed image path was
+  acknowledged in a comment that was true when written. The context changed, the comment did
+  not, and an accepted trade-off became an unexamined one.
+- **A field that stores a reference does not verify the referent.** 43 rows were valid in the
+  database and broken in the browser at the same time, and nothing in the stack offered to
+  notice.
 
 ---
 

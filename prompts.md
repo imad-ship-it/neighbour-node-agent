@@ -2069,6 +2069,146 @@ behaves like a test suite for the things test suites can't see.
 
 ---
 
+### 70. The path that pointed at nothing
+
+**Prompt:** most of the seeded listings show a broken thumbnail. Make the images actually
+appear.
+
+**Result.** 43 of 51 rows carried `image = "listings/2026/07/drill.jpg"` — a literal path
+that nothing had ever written. `ImageField` stores a **path**, not bytes, and `bulk_create`
+does not check that the referent exists. So the database was perfectly consistent, every row
+validated, and every card in the browser rendered a broken-image icon.
+
+**The asymmetry is the whole bug.** Nothing errors. No log line, no 500, no failing test.
+The listings API returns `"image": "listings/2026/07/drill.jpg"` with a 200, which is a
+truthful answer to "what path is stored" and a useless one for "can this be displayed". A
+field that holds a reference does not verify the thing it refers to, and nothing in Django
+offers to.
+
+**It was already written down, and that was not enough.** The seeder's own comment said it:
+*"media/ is gitignored, so on a fresh clone this points at nothing… Only effect of a missing
+file is a broken thumbnail in the frontend."* That was a fair trade when the seed existed to
+give geo-search some rows to filter. It stopped being fair the moment `docker compose up`
+became the demo, and the comment did not notice, because comments do not.
+
+**A documented cost is not a standing decision.** It is a decision that was correct in a
+context, and the context is not attached to it. This is the same failure mode as the README
+claiming the missing SDK pins were deliberate (entry 69) — prose that was true when written,
+load-bearing afterwards, and checked by nothing.
+
+**The fix removes the class, not the instance.** `apps/core/services/listing_images.py` draws
+a card per listing with Pillow — item name, category, category colour — and saves it through
+the `ImageField`, so real bytes land in `MEDIA_ROOT` wherever the seed runs. There is no path
+to be wrong about any more.
+
+Two implementation details worth keeping:
+
+**`bulk_create` cannot write file content.** Only `FieldFile.save()` pushes bytes through the
+storage backend. So the seed keeps `bulk_create` for speed, marks rows with a `PENDING_IMAGE`
+sentinel, and does a second pass that queries them back and saves a real file. Queried back,
+not taken from `bulk_create`'s return value — primary keys are only populated there on
+backends that can return rows from a bulk insert.
+
+**The container found a font problem the laptop could not.** `python:3.14-slim` ships **zero**
+font files — `/usr/share/fonts` is empty. `ImageFont.truetype("DejaVuSans.ttf")` works fine
+on a developer machine and raises inside the image. `ImageFont.load_default(size=...)`
+(Pillow ≥ 10.1) returns a real FreeType font bundled with Pillow itself, which is the only
+option that needs no `apt` layer. Exactly the shape of entry 69's missing-dependency finding:
+something present on one machine, absent everywhere else, invisible until the environment
+changed.
+
+---
+
+### 71. The button nobody could read
+
+**Prompt:** the sign-up button on the navbar — I can't see the words written on it.
+
+**Result.** A CSS specificity collision, and the only defect in this project that **no
+automated check of any kind would have caught**.
+
+"Sign up" is a `<Link className="btn btn-sm">`, which React Router renders as an `<a>` — and
+it sits inside `.site-nav`. Two rules therefore competed for its colour:
+
+| Rule | Declares | Specificity |
+|---|---|---|
+| `.btn` | `color: #fff` | 0-1-0 |
+| `.site-nav a` | `color: var(--text)` | **0-1-1 — wins** |
+
+The nav rule outranked the button rule, so the label was painted `var(--text)` on the
+`var(--accent)` fill. In dark mode that is **#9ca3af on #c084fc: a contrast ratio of roughly
+1.04:1**, where 1.0 means the two colours are identical. WCAG AA asks for 4.5:1. The text was
+not hard to read; it was mathematically almost absent. The same collision was also
+overriding the button's padding.
+
+**Neither file was wrong.** `.btn` is a correct button rule. `.site-nav a` is a correct
+nav-link rule. The defect existed only in their interaction, in a language with no import
+graph, no type system and no compiler to notice that one selector had quietly captured an
+element belonging to another. Grepping either file finds nothing.
+
+**What could have caught it, and what could not.** Not a unit test — there is no unit. Not an
+API test — the CSS was served with a 200 and byte-correct content. Not the container rebuild
+that found four bugs the day before (entry 69) — a fresh image renders identically wrong,
+because nothing about it is environmental. The instrument that detected it was a person
+looking at the screen and saying they could not read the button.
+
+Entry 69's lesson was that a different environment sees what tests cannot. This one goes a
+rung further: **a rendered pixel is a category of output nothing in the pipeline inspects**,
+and the only available verifier is an eye. Worth saying plainly because AI-assisted work is
+systematically weak here — the CSS I generated was syntactically valid, idiomatic, and
+invisible, and every check I had available agreed it was fine.
+
+The fix scopes the nav rules with `:not(.btn)` so anything styled as a button keeps its own
+styling. A follow-up request to level the navbar then resolved the *same* collision in the
+opposite direction on purpose, with a deliberate 0-2-1 override — which is the point:
+specificity is fine to rely on and dangerous to inherit by accident.
+
+**A second finding in the same pass.** Seeded listings were randomly dropping a tenth of
+their photos. The line's justification — *"so `no_photo` stays a minority signal rather than
+firing on every row"* — was true when every image pointed at the same shared fake path and a
+few blanks added variation. Once entry 70 gave each listing its own generated card, the same
+line only made an unpredictable ~15% of the demo grid look empty, with the count and the
+affected items changing on every reseed. The dedicated `no_photo` fixture already
+demonstrates the rule cleanly. **A comment explaining why a line exists does not expire when
+its reason does.**
+
+---
+
+### 72. Three claims, and a gitignore that did nothing
+
+**Prompt:** read the docs against the code before the presentation and fix whatever
+disagrees.
+
+**Result.** Three false claims and one rule that silently had no effect.
+
+**The README described the extraction endpoint as async. It is deliberately synchronous** —
+and not by accident. The docstring at `apps/listings/views.py` explains why at length: DRF's
+`APIView.dispatch` is synchronous, so an `async def` handler makes Django run the whole view
+on the event loop while DRF's authentication still issues sync ORM queries inside it, raising
+`SynchronousOnlyOperation` before the handler is ever reached. Under ASGI, Django already
+runs sync views in a threadpool, so the seconds-long vision call does not block the loop
+anyway.
+
+So the documentation did not merely drift. **It described the opposite of a decision that had
+been made carefully and written down forty lines away.** Two further claims were corrected in
+the same pass.
+
+**The gitignore that changed nothing.** `.mcp.json` hardcodes absolute Windows paths to a
+virtualenv interpreter, so it is valid on exactly one machine. Adding it to `.gitignore` and
+committing produced no effect at all — because the file was **already tracked**, and
+`.gitignore` only governs files git is not yet following. It needed `git rm --cached`, and
+the commit that did it is titled *"actually untrack .mcp.json"*, which is the honest name for
+the second attempt. The pattern to keep: a rule that arrives after the state it was meant to
+prevent does nothing, and says nothing about doing nothing.
+
+**Third documentation defect in three days**, after entries 59 and 67. The generalisation
+from those still holds and is getting harder to treat as bad luck: every other claim in this
+project has something that fails when it goes wrong — a broken import fails a test, a wrong
+status code fails the permission sweep. **A stale sentence fails nothing, ever, so it rots at
+exactly the rate nobody is reading it.** All three of these were found by reading, because
+reading is the only thing that finds them.
+
+---
+
 ## Recurring lessons (things I kept correcting)
 
 - **Activate the venv in every new terminal.** Most "module not found" / wrong-Python-
@@ -2415,3 +2555,21 @@ behaves like a test suite for the things test suites can't see.
 - **An advisory you can't dismiss in one sentence needs four.** "Doesn't apply to us" is
   worthless in a scan; the version, the mode it affects, the APIs actually used, and the
   auth mechanism are what make it checkable by someone who isn't me.
+- **A field that stores a reference does not verify the referent.** `ImageField` holds a
+  path, `bulk_create` never checks it resolves, and 43 rows were simultaneously valid in the
+  database and broken in the browser. Nothing in the stack offers to notice.
+- **A documented cost is not a standing decision.** The broken seed path was acknowledged in
+  a comment, and the comment was right when written. Contexts change and comments don't, so
+  an accepted trade-off quietly becomes an unexamined one.
+- **A comment justifying a line does not expire when its reason does.** Randomly blanking a
+  tenth of the seed photos made sense while every image shared one fake path, and became
+  pure noise the moment each listing drew its own.
+- **Some output has no verifier but a person.** A CSS specificity collision painted the
+  sign-up label at a 1.04:1 contrast ratio. No unit test, no API test, and no clean container
+  rebuild can see that — the bytes are correct and the status is 200. Rendered appearance is
+  the one category of output where the only instrument is an eye.
+- **A defect can live in the interaction of two correct files.** `.btn` was right,
+  `.site-nav a` was right, and CSS has no import graph in which their collision is visible.
+  Grepping either file finds nothing.
+- **`.gitignore` only governs untracked files.** Adding an already-committed file to it does
+  nothing, and reports nothing. `git rm --cached` is the actual operation.

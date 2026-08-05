@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "neighbour-node": {
-      "command": "D:\\iccode\\neighbour-node-agent\\backend\\venv\\Scripts\\python.exe",
-      "args": ["D:\\iccode\\neighbour-node-agent\\backend\\mcp_server.py"]
-    }
-  }
-}

@@ -142,15 +142,20 @@ in-process, writing to the same trace.
 ## Driving it from a real client instead
 
 The demo client is deliberately small so it can be read. To point a production client at
-the same server, the repo ships a committed [`.mcp.json`](../.mcp.json):
+the same server, copy [`.mcp.json.example`](../.mcp.json.example) and fill in your paths:
 
 ```bash
 cd neighbour-node-agent    # repo root, so the config is picked up
+cp .mcp.json.example .mcp.json
+# edit both paths to your checkout, then:
 claude                     # then /mcp shows: neighbour-node · connected
 ```
 
-The paths in `.mcp.json` are absolute and Windows-specific — change them to match your
-checkout.
+Both entries are absolute paths — the interpreter inside `backend/venv` and
+`backend/mcp_server.py` — so the file is only ever valid on one machine. That is why
+`.mcp.json` is gitignored and only the example is committed, the same arrangement as
+`.env` / `.env.example`. On Windows the interpreter is `backend\venv\Scripts\python.exe`
+rather than `backend/venv/bin/python`.
 
 ---
 

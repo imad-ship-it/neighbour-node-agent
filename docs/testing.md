@@ -40,7 +40,7 @@ coverage report --skip-covered
 # so the number and what it leaves out travel together.
 coverage report --skip-covered --omit="mcp_client_demo.py,fill_demo_thread.py,setup_demo_accounts.py,apps/core/management/commands/seed_data.py"
 
-coverage html && start htmlcov/index.html
+coverage html   # then open backend/htmlcov/index.html
 ```
 
 | | |

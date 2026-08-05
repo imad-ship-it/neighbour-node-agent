@@ -161,7 +161,7 @@ same `TraceLog` row, distinguished only by `agent_name`.
 
 ```
 neighbour-node-agent/
-├── .mcp.json                   # MCP client config — points a client at the server
+├── .mcp.json.example           # MCP client config template — copy to .mcp.json
 ├── backend/
 │   ├── config/                 # Django project (settings, urls, asgi/wsgi)
 │   ├── apps/
@@ -514,16 +514,19 @@ nothing. Every call writes a `TraceLog` row with `agent_name="mcp"`, so a filter
 column shows exactly what arrived over the protocol, and a match run shows its own
 `trust_check` step inline with the LLM calls.
 
-Connect a client with the committed [`.mcp.json`](.mcp.json) — start it from the repo
-root so the config is picked up:
+Connect a client by copying [`.mcp.json.example`](.mcp.json.example) — start it from the
+repo root so the config is picked up:
 
 ```bash
 cd neighbour-node-agent
+cp .mcp.json.example .mcp.json    # then edit both paths to your checkout
 claude          # then /mcp should show neighbour-node · connected
 ```
 
-The paths in `.mcp.json` are absolute and Windows-specific; change them to match your
-checkout. To run the server by hand (it will sit silently, waiting on stdin):
+Both entries are absolute paths — the venv interpreter and `mcp_server.py` — so the file
+is valid on one machine only. `.mcp.json` is gitignored and only the example is committed,
+the same arrangement as `.env` / `.env.example`. On Windows the interpreter is
+`backend\venv\Scripts\python.exe` rather than `backend/venv/bin/python`. To run the server by hand (it will sit silently, waiting on stdin):
 
 ```bash
 cd backend

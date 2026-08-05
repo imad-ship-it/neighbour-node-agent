@@ -149,8 +149,6 @@ class Command(BaseCommand):
                     latitude=round(random.uniform(24.0, 49.0), 6),
                     longitude=round(random.uniform(-124.0, -67.0), 6),
                     is_available=True,
-                    # A tenth go without, so no_photo stays a minority signal rather
-                    # than firing on every row.
                     # Every random listing gets an image. The no_photo trust rule
                     # is demonstrated by the dedicated fixture below, which is
                     # normal in every other respect so the flag identifies its own

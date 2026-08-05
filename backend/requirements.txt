@@ -19,16 +19,16 @@ Faker==40.35.0
 filelock==3.32.0
 h11==0.16.0
 httpcore==1.0.9
-httpcore2==2.9.1
+httpcore2==2.9.1  # transport for httpx2 below; both are genuine
 httpx==0.28.1
-httpx2==2.9.1
+httpx2==2.9.1  # NOT a typo for httpx - mcp 2.0.0 requires httpx2>=2.5.0 directly
 identify==2.6.19
 idna==3.18
 jiter==0.16.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 mcp==2.0.0
-mcp-types==2.0.0
+mcp-types==2.0.0  # required by mcp 2.0.0, alongside the mcp dist itself
 nodeenv==1.10.0
 opentelemetry-api==1.44.0
 pillow==12.3.0
@@ -39,7 +39,7 @@ pydantic==2.13.4
 pydantic_core==2.46.4
 PyJWT==2.13.0
 python-decouple==3.8
-python-discovery==1.5.0
+python-discovery==1.5.0  # required by virtualenv 21.7, which pre-commit requires
 python-multipart==0.0.32
 # Windows-only, and nothing in this project imports it — it arrived as a
 # transitive pin from a local install. Unmarked it hard-fails `pip install` inside

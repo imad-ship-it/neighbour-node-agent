@@ -4,6 +4,11 @@ node_modules/
 .env
 .vscode/
 
+# MCP client config: absolute interpreter and script paths, so it is valid on
+# exactly one machine. `.mcp.json.example` is the committed copy to copy from —
+# same arrangement as `.env` / `.env.example`.
+.mcp.json
+
 backend/db.sqlite3
 # WAL leaves a write-ahead log and a shared-memory index beside the database.
 # They are not covered by the pattern above and are pure local state.

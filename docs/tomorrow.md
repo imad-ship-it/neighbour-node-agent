@@ -19,9 +19,10 @@ as broken thumbnails on every clone and in every container.
 real bytes land on the media volume wherever the seed runs. No binary in git, no
 network call, works offline on a fresh `docker compose up`.
 
-Verified from a clean volume: 48 listings, 40 with images, **0 broken**, all
-served by nginx off the media volume. The four rows without images are
-deliberate — the `no_photo` trust rule needs something to fire on.
+Verified from a clean volume: 48 listings, 47 with images, **0 broken** — every
+one fetched through nginx off the media volume and checked for a 200. The single
+row without an image is deliberate: the "Folding Camping Table" fixture exists so
+the `no_photo` trust rule has something to fire on.
 
 **Upgrade path if you want real photos later.** Drop `<noun>.jpg` into
 `backend/seed_images/` — `drill.jpg`, `kayak.jpg`, `bike.jpg` — and it is used in
@@ -76,16 +77,31 @@ it is resolved. Fix by moving the non-component export into its own module.
 
 ---
 
-## 5. Suspicious pins in `requirements.txt`
+## ~~5. Suspicious pins in `requirements.txt`~~ — CHECKED, they are real
 
-`httpcore2`, `httpx2`, `mcp-types`, `python-discovery` sit alongside the normal
-`httpcore` / `httpx` / `mcp`. They install and nothing imports the duplicates
-directly, so they look like they arrived from a bad resolve rather than a
-decision. Worth ten minutes with `pipdeptree` to see whether anything actually
-depends on them, and dropping them if not — every unexplained pin is something
-the next person has to reason about.
+`httpcore2`, `httpx2`, `mcp-types`, `python-discovery` looked like they arrived
+from a bad resolve, sitting alongside the normal `httpcore` / `httpx` / `mcp`.
+They are not. `pipdeptree --reverse` in the container:
 
-Not urgent: they build fine in the image.
+```
+httpcore2==2.9.1
+└── httpx2==2.9.1 [requires: httpcore2==2.9.1]
+    └── mcp==2.0.0 [requires: httpx2>=2.5.0]
+mcp-types==2.0.0
+└── mcp==2.0.0 [requires: mcp-types==2.0.0]
+python-discovery==1.5.0
+└── virtualenv==21.7.0 [requires: python-discovery>=1.4.2]
+    └── pre_commit==4.6.0 [requires: virtualenv>=20.10.0]
+```
+
+`pip show mcp` confirms it from the other direction — `httpx2` and `mcp-types`
+are in its own `Requires:` list. The `2` suffixes read like typosquats and are
+not: `httpx2` is what `mcp` 2.0.0 actually depends on.
+
+Dropping the four lines would not have failed the build — pip would reinstall
+them transitively — but it would have lost the pins in a file that pins
+everything else. They now carry an inline comment each, so the next person
+doesn't spend the same ten minutes.
 
 ---
 

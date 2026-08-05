@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import client from '../api/client'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { mergeMessages } from './mergeMessages'
 import { CONVERSATIONS_KEY, messagesKey } from './messagingKeys'
 

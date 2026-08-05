@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import EmptyState from '../components/EmptyState'
 import ListingCard from '../components/ListingCard'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { useBookmarks } from '../hooks/useBookmarks'
 
 function Bookmarks() {

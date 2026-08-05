@@ -1,5 +1,5 @@
 import { apiError } from '../api/client'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { useStartConversation } from '../hooks/useStartConversation'
 
 /**

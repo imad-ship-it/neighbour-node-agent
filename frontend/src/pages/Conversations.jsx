@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import EmptyState from '../components/EmptyState'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { useConversations } from '../hooks/useConversations'
 import { timeAgo } from '../utils/time'
 

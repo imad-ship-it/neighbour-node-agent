@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { apiError } from '../api/client'
 import Button from '../components/Button'
 import MatchCard from '../components/MatchCard'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { DEFAULT_LAT, DEFAULT_LNG, useMatch } from '../hooks/useMatch'
 
 const EXAMPLES = [

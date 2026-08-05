@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import { useConversation } from '../hooks/useConversations'
 import { useMarkRead } from '../hooks/useMarkRead'
 import { useMessages } from '../hooks/useMessages'

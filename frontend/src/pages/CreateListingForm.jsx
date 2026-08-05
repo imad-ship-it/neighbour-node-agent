@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import client, { apiError } from '../api/client'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/useAuth'
 import Button from '../components/Button'
 
 // Must match the backend Listing.Category / Listing.Condition TextChoices.

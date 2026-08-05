@@ -7,13 +7,19 @@ from uuid import uuid4
 from apps.core.services.llm import get_provider
 from apps.core.services.tracing import trace_call
 from apps.core.services.validation import LLMValidationError, generate_and_validate
+from decouple import config
 from django.core.cache import cache
 
 from .models import Listing
 from .schemas import ListingExtraction
 
 MAX_IMAGE_DIM = 1568  # long-edge cap in px — keeps token cost and upload size sane
-CACHE_TTL = 60 * 60 * 24  # 24h
+
+# Configurable because Redis persistence protects a warmed cache across restarts but not
+# across the TTL. A cache warmed the afternoon before a demo is cold by the following
+# afternoon at 24h, and the warming has to be redone on the morning. Compose sets 72h so
+# the demo window is comfortably inside it.
+CACHE_TTL = config("CACHE_TTL", default=60 * 60 * 24, cast=int)
 
 
 class ExtractionError(Exception):

@@ -43,6 +43,10 @@ services:
       ALLOWED_HOSTS: localhost,127.0.0.1,backend
       CSRF_TRUSTED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
       GUNICORN_WORKERS: "1"
+      # 72h, not the 24h default: Redis persistence keeps a warmed extraction cache
+      # across restarts, but nothing keeps it across the TTL. At 24h a cache warmed
+      # the afternoon before a demo is cold by the next afternoon.
+      CACHE_TTL: "259200"
     volumes:
       # Two volumes, and both are load-bearing.
       #

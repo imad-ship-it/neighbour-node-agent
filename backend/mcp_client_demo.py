@@ -22,6 +22,7 @@ a primary key, so a reseeded database doesn't break the demo.
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -173,6 +174,13 @@ async def main(step):
         command=sys.executable,
         args=[str(SERVER_SCRIPT)],
         cwd=str(BACKEND_DIR),
+        # Without this the SDK hands the server get_default_environment(), which
+        # is only HOME and PATH — a sensible default for spawning someone else's
+        # server, wrong for spawning our own. On a laptop it went unnoticed
+        # because python-decouple falls back to reading backend/.env off disk;
+        # in the container there is no such file and config arrives purely as
+        # environment, so the server died on SECRET_KEY before it could speak.
+        env=os.environ.copy(),
     )
     # errlog=DEVNULL would hide the server's stderr banner; keep it visible so a
     # server that fails to boot says so instead of looking like a client bug.

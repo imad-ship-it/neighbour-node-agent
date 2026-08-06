@@ -12,14 +12,20 @@ those as fully covered the first time the line executes.
 
 | | Baseline | Final |
 |---|---|---|
-| **Overall** — everything under `backend/` | 64% | **76%** |
-| **Product code** — excluding demo scripts, the seed command and the MCP demo client | 78% | **91%** |
+| **Overall** — everything under `backend/` | 64% | **71%** |
+| **Product code** — excluding demo scripts, the seed command and its image helper, and the MCP demo client | 78% | **91%** |
 
 Both figures are quoted because neither is honest alone. The overall number is
-depressed by four hand-run files that will never have tests — `mcp_client_demo.py`,
-`setup_demo_accounts.py`, `fill_demo_thread.py` and the `seed_data` management
-command, together 206 statements at 0%. The product figure excludes exactly
-those four, named in words, and nothing else.
+depressed by five hand-run or seed-time files that will never have tests —
+`mcp_client_demo.py`, `setup_demo_accounts.py`, `fill_demo_thread.py`, the
+`seed_data` management command and the `listing_images` helper it calls to draw
+seed thumbnails — together 294 statements at 0%. The product figure excludes
+exactly those five, named in words, and nothing else.
+
+`listing_images.py` is seed-time only and never runs in the request path, which is
+why it sits with `seed_data` rather than with product code. It was written after
+these figures were first recorded, and until it was added to the exclusion below it
+dragged the product number to 86% — the same file, counted two different ways.
 
 **`.coveragerc` omits six categories and no more:** migrations, settings,
 wsgi/asgi, `manage.py`, test files, and the venv. The demo scripts were briefly
@@ -38,7 +44,7 @@ coverage report --skip-covered
 
 # Product only. The exclusion is spelled out rather than hidden in config,
 # so the number and what it leaves out travel together.
-coverage report --skip-covered --omit="mcp_client_demo.py,fill_demo_thread.py,setup_demo_accounts.py,apps/core/management/commands/seed_data.py"
+coverage report --skip-covered --omit="mcp_client_demo.py,fill_demo_thread.py,setup_demo_accounts.py,apps/core/management/commands/seed_data.py,apps/core/services/listing_images.py"
 
 coverage html   # then open backend/htmlcov/index.html
 ```
@@ -46,7 +52,7 @@ coverage html   # then open backend/htmlcov/index.html
 | | |
 |---|---|
 | [![overall coverage](screenshots/06-coverage.png)](screenshots/06-coverage.png) | [![product coverage](screenshots/07-coverage-product.png)](screenshots/07-coverage-product.png) |
-| **76% overall** — the HTML report, branch coverage on | **91% product** — 50 files skipped at 100% |
+| **71% overall** — the HTML report, branch coverage on | **91% product** — 46 files skipped at 100% |
 
 ## Composition
 

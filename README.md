@@ -18,8 +18,9 @@ Built **stub-first**: the entire pipeline runs end-to-end with a deterministic f
 - **Backend:** Django 6 + Django REST Framework
 - **Frontend:** React 19 + Vite
 - **Database:** SQLite (development)
-- **AI:** pluggable LLM provider layer (stub today; Claude for vision extraction and DeepSeek
-  for matching are wired by role, live API bodies pending)
+- **AI:** pluggable LLM provider layer — Claude Haiku 4.5 for vision extraction and DeepSeek
+  Chat for matching, resolved independently by role, both live. A deterministic stub provider
+  is the default, so the pipeline still runs end-to-end with no API keys.
 
 ---
 
@@ -629,16 +630,12 @@ The reasoning, the migration path and what was tested to protect it are in
 
 ## Known limitations & next steps
 
-[**docs/reflection.md**](docs/reflection.md) has the fuller account: what AI did well, the
-four failures that each needed a different kind of verification to catch, the places the
-log corrects itself, and the limitations below stated with their reasoning.
-
 - Real geolocation is still fixed-point (below), and the frontend has no token-refresh
   flow — an eight-hour access token papers over it, but a session longer than that ends
   in a 401 rather than a refresh.
 - Test coverage is **169 backend tests and 16 frontend**, measured with branch coverage:
-  **76% overall, 91% on product code** excluding the demo scripts, seed command and MCP
-  demo client. Composition, the known gaps, the screenshots behind both figures, and what
+  **71% overall, 91% on product code** excluding the demo scripts, the seed command and its
+  image helper, and the MCP demo client. Composition, the known gaps, and what
   coverage does *not* measure are in [docs/testing.md](docs/testing.md). The main remaining gaps are the two provider
   `generate()` methods, which need SDK mocking, and frontend rendering — pure logic is
   tested, anything needing a DOM is deliberately out of scope.
